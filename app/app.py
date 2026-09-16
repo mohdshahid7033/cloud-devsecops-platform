@@ -3,12 +3,12 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
     return "Cloud-Based DevSecOps Platform is running!"
 
 
-@app.route("/health")
+@app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "healthy",
