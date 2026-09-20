@@ -1,5 +1,5 @@
-FROM python:3.14-slim
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+FROM python:3.14-alpine
+RUN apk update && apk upgrade
 
 WORKDIR /app
 
