@@ -67,3 +67,30 @@ jobs:
         run: |
           docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
+
+      - name: Deploy to EC2 via SSM
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids i-0fb9dcbeb35b4fdbe \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com",
+              "docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
+              "docker stop devsecops-app || true",
+              "docker rm devsecops-app || true",
+              "docker run -d --name devsecops-app -p 5000:5000 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
+              "sleep 5",
+              "curl -f http://localhost:5000/health"
+            ]' \
+            --region ap-south-1 \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          sleep 10
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id i-0fb9dcbeb35b4fdbe \
+            --region ap-south-1
