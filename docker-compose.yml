@@ -16,3 +16,11 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: devsecops-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
