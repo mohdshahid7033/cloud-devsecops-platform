@@ -78,10 +78,15 @@ jobs:
               "docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
               "docker stop devsecops-app || true",
               "docker rm devsecops-app || true",
-              "docker run -d --name devsecops-app -p 5000:5000 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
+              "docker network create devsecops-network || true",
+              "docker run -d --name devsecops-app --network devsecops-network 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
+              "echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf",
+              "docker stop devsecops-nginx || true",
+              "docker rm devsecops-nginx || true",
+              "docker run -d --name devsecops-nginx --network devsecops-network -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine",
               "sleep 5",
-              "curl -f http://localhost:5000/health"
-            ]' \
+              "curl -f http://localhost/health"
+             ]' \
             --region ap-south-1 \
             --query 'Command.CommandId' \
             --output text)
