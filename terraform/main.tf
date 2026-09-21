@@ -25,7 +25,7 @@ resource "aws_vpc" "devsecops_vpc" {
 resource "aws_subnet" "devsecops_subnet" {
   vpc_id                  = aws_vpc.devsecops_vpc.id
   cidr_block              = "10.0.1.0/24"
-  availability_zone       = "ap-south-1a"
+  availability_zone       = var.availability_zone
   map_public_ip_on_launch = true
 
   tags = {
@@ -94,8 +94,8 @@ resource "aws_security_group" "devsecops_sg" {
   }
 }
 resource "aws_instance" "devsecops_ec2" {
-  ami                    = "ami-0ee11497c4eac651d"
-  instance_type          = "t3.micro"
+  ami                    = var.ami_id
+  instance_type          = var.instance_type
   subnet_id              = aws_subnet.devsecops_subnet.id
   vpc_security_group_ids = [aws_security_group.devsecops_sg.id]
   key_name               = "devsecops-key"
