@@ -74,7 +74,7 @@ jobs:
           docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
 
-  - name: Deploy to EC2 via SSM
+      - name: Deploy to EC2 via SSM
     run: |
       cat > ssm-commands.json <<'EOF'
       {
