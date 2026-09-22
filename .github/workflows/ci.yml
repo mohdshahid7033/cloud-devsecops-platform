@@ -79,7 +79,7 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=[
+            --parameters '{"commands":[
               "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com",
               "docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
               "docker stop devsecops-app || true",
@@ -92,7 +92,7 @@ jobs:
               "docker run -d --name devsecops-nginx --network devsecops-network -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine",
               "sleep 5",
               "curl -f http://localhost/health"
-             ]' \
+             ]}' \
             --region ap-south-1 \
             --query 'Command.CommandId' \
             --output text)
