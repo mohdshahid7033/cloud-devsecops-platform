@@ -4,4 +4,4 @@ global:
 scrape_configs:
   - job_name: "devsecops-app"
     static_configs:
-      - targets: ["app:5000"]
+      - targets: ["devsecops-app:5000"]

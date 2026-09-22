@@ -102,7 +102,18 @@ jobs:
               "docker stop devsecops-nginx || true",
               "docker rm devsecops-nginx || true",
               "docker run -d --name devsecops-nginx --network devsecops-network -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine",
+              "echo Z2xvYmFsOgogIHNjcmFwZV9pbnRlcnZhbDogMTVzCgpzY3JhcGVfY29uZmlnczoKICAtIGpvYl9uYW1lOiAiZGV2c2Vjb3BzLWFwcCIKICAgIHN0YXRpY19jb25maWdzOgogICAgICAtIHRhcmdldHM6IFsiZGV2c2Vjb3BzLWFwcDo1MDAwIl0K | base64 -d > /home/ec2-user/prometheus.yml",
+              "docker stop devsecops-prometheus || true",
+              "docker rm devsecops-prometheus || true",
+              "docker volume create devsecops-prometheus-data || true",
+              "docker run -d --name devsecops-prometheus --network devsecops-network -p 9090:9090 -v /home/ec2-user/prometheus.yml:/etc/prometheus/prometheus.yml:ro -v devsecops-prometheus-data:/prometheus prom/prometheus:latest --config.file=/etc/prometheus/prometheus.yml",
+              "docker stop devsecops-grafana || true",
+              "docker rm devsecops-grafana || true",
+              "docker volume create devsecops-grafana-data || true",
+              "docker run -d --name devsecops-grafana --network devsecops-network -p 3000:3000 -v devsecops-grafana-data:/var/lib/grafana grafana/grafana:latest",
               "sleep 5",
+              "sleep 10",
+              "docker ps --filter name=devsecops-prometheus --filter name=devsecops-grafana --format '{{.Names}}' | grep -E 'devsecops-prometheus|devsecops-grafana'",
               "curl -f http://localhost/health"
             ]
           }
