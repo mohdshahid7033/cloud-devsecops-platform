@@ -107,3 +107,5 @@ jobs:
             --region ap-south-1
 # CI workflow
 # CI trigger
+
+# SSM deployment syntax verified
