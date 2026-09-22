@@ -105,3 +105,4 @@ jobs:
             --command-id "$COMMAND_ID" \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1
+# CI workflow
