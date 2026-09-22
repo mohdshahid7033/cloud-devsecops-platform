@@ -74,38 +74,43 @@ jobs:
           docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
 
-      - name: Deploy to EC2 via SSM
-        run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunShellScript" \
-            --parameters '{"commands":[
-              "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com",
-              "docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
-              "docker stop devsecops-app || true",
-              "docker rm devsecops-app || true",
-              "docker network create devsecops-network || true",
-              "docker run -d --name devsecops-app --network devsecops-network 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
-              "echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf",
-              "docker stop devsecops-nginx || true",
-              "docker rm devsecops-nginx || true",
-              "docker run -d --name devsecops-nginx --network devsecops-network -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine",
-              "sleep 5",
-              "curl -f http://localhost/health"
-             ]}' \
-            --region ap-south-1 \
-            --query 'Command.CommandId' \
-            --output text)
+  - name: Deploy to EC2 via SSM
+    run: |
+      cat > ssm-commands.json <<'EOF'
+      {
+        "commands": [
+          "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com",
+          "docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
+          "docker stop devsecops-app || true",
+          "docker rm devsecops-app || true",
+          "docker network create devsecops-network || true",
+          "docker run -d --name devsecops-app --network devsecops-network 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest",
+          "echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf",
+          "docker stop devsecops-nginx || true",
+          "docker rm devsecops-nginx || true",
+          "docker run -d --name devsecops-nginx --network devsecops-network -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine",
+          "sleep 5",
+          "curl -f http://localhost/health"
+        ]
+      }
+      EOF
 
-          echo "SSM Command ID: $COMMAND_ID"
+      COMMAND_ID=$(aws ssm send-command \
+        --instance-ids i-0fb9dcbeb35b4fdbe \
+        --document-name "AWS-RunShellScript" \
+        --parameters file://ssm-commands.json \
+        --region ap-south-1 \
+        --query 'Command.CommandId' \
+        --output text)
 
-          sleep 10
+      echo "SSM Command ID: $COMMAND_ID"
 
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id i-0fb9dcbeb35b4fdbe \
-            --region ap-south-1
-# CI workflow
+      sleep 10
+
+      aws ssm get-command-invocation \
+        --command-id "$COMMAND_ID" \
+        --instance-id i-0fb9dcbeb35b4fdbe \
+        --region ap-south-1# CI workflow
 # CI trigger
 
 # SSM deployment syntax verified
