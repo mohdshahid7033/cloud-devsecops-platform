@@ -6,7 +6,7 @@ metrics = PrometheusMetrics(app)
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Cloud-Based DevSecOps Platform is running! CI/CD deployment verified."
+    return "Cloud-Based DevSecOps Platform is running!"
 
 
 @app.route("/health", methods=["GET"])
