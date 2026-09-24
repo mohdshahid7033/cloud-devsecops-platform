@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: [self-hosted, windows]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
 
       - name: Run tests
         run: |
-          export PYTHONPATH=.
+          $env:PYTHONPATH="."
           pytest
 
       - name: SonarQube analysis
@@ -58,19 +58,10 @@ jobs:
           exit-code: 1
           trivyignores: .trivyignore
 
-      - name: Install AWS CLI v2
-        shell: bash
+      - name: Check AWS CLI
+        shell: powershell
         run: |
-          set -euo pipefail
-          install_dir="$RUNNER_TEMP/aws-cli"
-          bin_dir="$RUNNER_TEMP/aws-bin"
-          curl --fail --silent --show-error --location \
-            https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
-            --output "$RUNNER_TEMP/awscliv2.zip"
-          unzip -q "$RUNNER_TEMP/awscliv2.zip" -d "$RUNNER_TEMP"
-          "$RUNNER_TEMP/aws/install" --install-dir "$install_dir" --bin-dir "$bin_dir"
-          echo "$bin_dir" >> "$GITHUB_PATH"
-          "$bin_dir/aws" --version
+         aws --version
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
