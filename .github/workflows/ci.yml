@@ -38,6 +38,13 @@ jobs:
           }
           if (Test-Path "C:\Users\MOHD SHAHID\bin") {
             Copy-Item -Path "$env:APPDATA\Python\Python314\Scripts\aws*" -Destination "C:\Users\MOHD SHAHID\bin" -Force
+            Set-Content -Path "C:\Users\MOHD SHAHID\bin\aws" -Value "#!/usr/bin/env bash`naws.cmd `"`$@`""
+          }
+          if (Test-Path "C:\actions-runner\bin") {
+            Copy-Item -Path "C:\Users\MOHD SHAHID\bin\aws*" -Destination "C:\actions-runner\bin" -Force
+          }
+          if (Test-Path "C:\trivy") {
+            Copy-Item -Path "C:\Users\MOHD SHAHID\bin\aws*" -Destination "C:\trivy" -Force
           }
 
       - name: Run tests
@@ -143,7 +150,7 @@ jobs:
         env:
           MSYS_NO_PATHCONV: 1
         run: |
-          export PATH="$HOME/bin:$PATH"
+          export PATH="/c/actions-runner/bin:/c/trivy:$HOME/bin:$PATH"
           cat > ssm-commands.json <<'EOF'
           {
             "commands": [
