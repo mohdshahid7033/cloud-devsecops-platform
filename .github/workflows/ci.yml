@@ -72,7 +72,11 @@ jobs:
           if ($code -ne "200") {
             Write-Host "Updating SonarQube token registration to match secret..."
             $sql = "UPDATE USER_TOKENS SET TOKEN_HASH = '$tokenHash' WHERE NAME = 'sonar-window-ci';"
-            $sql | docker exec -i sonarqube bash -c "cat > /tmp/update_token.sql && /opt/java/openjdk/bin/java -cp /opt/sonarqube/lib/jdbc/h2/h2-2.3.232.jar org.h2.tools.RunScript -url 'jdbc:h2:tcp://127.0.0.1:9092/sonar;USER=;PASSWORD=' -script /tmp/update_token.sql && rm -f /tmp/update_token.sql"
+            Set-Content -Path "update_token.sql" -Value $sql
+            docker cp update_token.sql sonarqube:/tmp/update_token.sql
+            docker exec -u 0 sonarqube /opt/java/openjdk/bin/java -cp /opt/sonarqube/lib/jdbc/h2/h2-2.3.232.jar org.h2.tools.RunScript -url "jdbc:h2:tcp://127.0.0.1:9092/sonar;USER=;PASSWORD=" -script /tmp/update_token.sql
+            docker exec -u 0 sonarqube rm -f /tmp/update_token.sql
+            Remove-Item -Path "update_token.sql" -Force
             $codeAfter = curl.exe -s -o NUL -w "%{http_code}" -u "${token}:" http://localhost:9000/api/v2/analysis/version
             Write-Host "Auth check after update: $codeAfter"
           }
