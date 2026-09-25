@@ -10,15 +10,16 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
+      - name: Check Python
+  shell: powershell
+  run: |
+    python --version
+    pip --version
 
       - name: Install dependencies
         run: |
@@ -61,7 +62,7 @@ jobs:
       - name: Check AWS CLI
         shell: powershell
         run: |
-         aws --version
+          aws --version
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
