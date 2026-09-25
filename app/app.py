@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template
 from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
@@ -6,7 +6,7 @@ metrics = PrometheusMetrics(app)
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Cloud-Based DevSecOps Platform is running!"
+    return render_template("index.html")
 
 
 @app.route("/health", methods=["GET"])
