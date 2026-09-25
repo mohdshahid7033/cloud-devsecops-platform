@@ -20,6 +20,7 @@ jobs:
         run: |
           python --version
           pip --version
+          echo "C:\Program Files\Git\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "$env:APPDATA\Python\Python314\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Users\MOHD SHAHID\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\sonar-scanner\sonar-scanner-7.0.2.4839-windows-x64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
