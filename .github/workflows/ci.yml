@@ -22,11 +22,14 @@ jobs:
          pip --version
 
       - name: Install dependencies
+        shell: powershell
         run: |
-          pip install -r app/requirements.txt
-          pip install pytest
+          python -m pip install -r app/requirements.txt
+          python -m pip install pytest
 
       - name: Run tests
+        shell: powershell
+
         run: |
           $env:PYTHONPATH="."
           python -m pytest
