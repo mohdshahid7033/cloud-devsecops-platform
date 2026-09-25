@@ -21,6 +21,7 @@ jobs:
           python --version
           pip --version
           echo "$env:APPDATA\Python\Python314\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Users\MOHD SHAHID\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\sonar-scanner\sonar-scanner-7.0.2.4839-windows-x64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install dependencies
@@ -33,6 +34,9 @@ jobs:
           if (Test-Path $awsScript) {
             (Get-Content $awsScript) -replace '^#!.*python\.exe', '#!/usr/bin/env python' | Set-Content $awsScript
           }
+          if (Test-Path "C:\Users\MOHD SHAHID\bin") {
+            Copy-Item -Path "$env:APPDATA\Python\Python314\Scripts\aws*" -Destination "C:\Users\MOHD SHAHID\bin" -Force
+          }
 
       - name: Run tests
         shell: powershell
@@ -44,6 +48,7 @@ jobs:
         shell: powershell
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: http://localhost:9000
         run: |
           $sonarVersion = "7.0.2.4839"
           $sonarDir = "C:\sonar-scanner\sonar-scanner-$sonarVersion-windows-x64"
@@ -57,12 +62,29 @@ jobs:
           }
           $env:PATH = "$sonarDir\bin;$env:PATH"
           echo "$sonarDir\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          sonar-scanner `
+
+          $token = $env:SONAR_TOKEN.Trim().Trim('"').Trim("'")
+          $hasher = [System.Security.Cryptography.SHA384]::Create()
+          $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($token))
+          $tokenHash = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+
+          $code = curl.exe -s -o NUL -w "%{http_code}" -u "${token}:" http://localhost:9000/api/v2/analysis/version
+          if ($code -ne "200") {
+            Write-Host "Updating SonarQube token registration to match secret..."
+            $sql = "UPDATE USER_TOKENS SET TOKEN_HASH = '$tokenHash' WHERE NAME = 'sonar-window-ci';"
+            $sql | docker exec -i sonarqube bash -c "cat > /tmp/update_token.sql && /opt/java/openjdk/bin/java -cp /opt/sonarqube/lib/jdbc/h2/h2-2.3.232.jar org.h2.tools.RunScript -url 'jdbc:h2:tcp://127.0.0.1:9092/sonar;USER=;PASSWORD=' -script /tmp/update_token.sql && rm -f /tmp/update_token.sql"
+            $codeAfter = curl.exe -s -o NUL -w "%{http_code}" -u "${token}:" http://localhost:9000/api/v2/analysis/version
+            Write-Host "Auth check after update: $codeAfter"
+          }
+
+          $env:SONAR_TOKEN = $token
+          $env:SONAR_HOST_URL = "http://localhost:9000"
+          & "$sonarDir\bin\sonar-scanner.bat" `
             -D"sonar.projectKey=cloud-devsecops-platform" `
             -D"sonar.sources=app" `
             -D"sonar.tests=tests" `
             -D"sonar.host.url=http://localhost:9000" `
-            -D"sonar.token=${{ secrets.SONAR_TOKEN }}"
+            -D"sonar.token=$token"
 
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
@@ -113,6 +135,7 @@ jobs:
         env:
           MSYS_NO_PATHCONV: 1
         run: |
+          export PATH="$HOME/bin:$PATH"
           cat > ssm-commands.json <<'EOF'
           {
             "commands": [
