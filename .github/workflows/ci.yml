@@ -16,10 +16,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check Python
-  shell: powershell
-  run: |
-    python --version
-    pip --version
+        shell: powershell
+        run: |
+         python --version
+         pip --version
 
       - name: Install dependencies
         run: |
