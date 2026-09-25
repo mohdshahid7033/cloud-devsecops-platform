@@ -35,10 +35,14 @@ jobs:
           python -m pytest
 
       - name: SonarQube analysis
-        uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: http://localhost:9000
+        shell: powershell
+        run: |
+          sonar-scanner `
+            -D"sonar.projectKey=cloud-devsecops-platform" `
+            -D"sonar.sources=app" `
+            -D"sonar.tests=tests" `
+            -D"sonar.host.url=http://localhost:9000" `
+            -D"sonar.token=${{ secrets.SONAR_TOKEN }}"
 
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
