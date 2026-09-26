@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="ABC Free Consultants - Enterprise-grade business strategy, cloud modernization, and financial advisory at zero cost.">
-  <title>ABC Free Consultants | Zero-Cost Strategic Advisory & Digital Transformation</title>
+  <meta name="description" content="ABC Free Consultants - Enterprise-grade business strategy, cloud modernization, and financial advisory delivered by an automated Cloud-Based DevSecOps Platform.">
+  <title>ABC Free Consultants | Zero-Cost Strategic Advisory & DevSecOps Platform</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -16,9 +16,13 @@
         DevSecOps Live
       </span>
       <span class="ci-message">
-        <strong>Continuous Delivery Active:</strong> Release <code>v1.0.1-production</code> automatically deployed via GitHub Actions &amp; AWS Systems Manager.
+        <strong>Automated Cloud Delivery:</strong> Release <code>v1.0.1-production</code> verified via SonarQube, Trivy, Docker &amp; AWS Systems Manager.
       </span>
-      <a href="/health" class="ci-link" title="Check Health Status">System Health &#8594;</a>
+      <div class="ci-links-group">
+        <a href="#architecture" class="ci-link">Architecture Flow &#8595;</a>
+        <a href="#telemetry" class="ci-link">Live Telemetry &#8595;</a>
+        <a href="/health" class="ci-link" target="_blank" rel="noopener noreferrer">API Health &#8594;</a>
+      </div>
     </div>
   </div>
 
@@ -52,11 +56,13 @@
           <li class="nav-item"><a href="#home" class="nav-link active">Home</a></li>
           <li class="nav-item"><a href="#about" class="nav-link">About</a></li>
           <li class="nav-item"><a href="#services" class="nav-link">Services</a></li>
-          <li class="nav-item"><a href="#why-us" class="nav-link">Why Choose Us</a></li>
+          <li class="nav-item"><a href="#architecture" class="nav-link">Architecture</a></li>
+          <li class="nav-item"><a href="#pipeline" class="nav-link">CI/CD Pipeline</a></li>
+          <li class="nav-item"><a href="#telemetry" class="nav-link">Live Telemetry</a></li>
           <li class="nav-item"><a href="#contact" class="nav-link">Contact</a></li>
         </ul>
         <div class="nav-cta">
-          <a href="#contact" class="btn btn-primary btn-sm">Get Free Advisory</a>
+          <a href="#contact" class="btn btn-primary btn-sm">Request Consultation</a>
         </div>
       </nav>
 
@@ -76,37 +82,45 @@
         <div class="hero-content">
           <div class="hero-pill">
             <span class="pill-dot"></span>
-            <span>Zero Advisory Fees &bull; Enterprise-Grade Execution</span>
+            <span>Zero Advisory Fees &bull; Enterprise-Grade DevSecOps Delivery</span>
           </div>
           <h1 class="hero-title">
             Empowering Strategic Growth with <span class="gradient-text">Zero-Cost</span> Expert Advisory
           </h1>
           <p class="hero-subtitle">
-            ABC Free Consultants provides high-impact business strategy, cloud modernization, and operational transformation at no charge—empowering ambitious enterprises to scale sustainably.
+            ABC Free Consultants provides strategic business transformation and cloud modernization at no charge—delivered seamlessly through an enterprise automated DevSecOps platform with real-time monitoring and strict security gates.
           </p>
           <div class="hero-actions">
-            <a href="#services" class="btn btn-primary btn-lg">Explore Our Services</a>
-            <a href="#contact" class="btn btn-outline btn-lg">Book Discovery Call</a>
+            <a href="#services" class="btn btn-primary btn-lg">Explore Services</a>
+            <a href="#architecture" class="btn btn-outline btn-lg">View DevSecOps Flow</a>
           </div>
+
+          <!-- Real Demonstrable Platform Metrics (Replacing Fake Business Claims) -->
           <div class="hero-stats">
             <div class="stat-item">
-              <span class="stat-number">500+</span>
-              <span class="stat-label">Organizations Advised</span>
-            </div>
-            <div class="stat-divider"></div>
-            <div class="stat-item">
               <span class="stat-number">100%</span>
-              <span class="stat-label">Complimentary Service</span>
+              <span class="stat-label">Automated CI/CD Delivery</span>
             </div>
             <div class="stat-divider"></div>
             <div class="stat-item">
-              <span class="stat-number">99.9%</span>
-              <span class="stat-label">Client Satisfaction</span>
+              <span class="stat-number">0</span>
+              <span class="stat-label">Critical Trivy CVEs</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <span class="stat-number">&lt; 15ms</span>
+              <span class="stat-label">P95 Proxy Latency</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <span class="stat-number">24/7</span>
+              <span class="stat-label">Prometheus Telemetry</span>
             </div>
           </div>
         </div>
 
         <div class="hero-graphic">
+          <!-- Live Interactive Engineering Card -->
           <div class="hero-card hero-card-main">
             <div class="card-header-row">
               <span class="card-icon-wrap icon-strategy">
@@ -115,29 +129,37 @@
                 </svg>
               </span>
               <div class="card-header-text">
-                <h3>Executive Advisory Dashboard</h3>
-                <span class="text-muted">Real-Time Performance Overview</span>
+                <h3>Cloud Platform Live Control</h3>
+                <span class="text-muted">Real-Time Infrastructure Telemetry</span>
               </div>
             </div>
             <div class="card-metric-grid">
               <div class="metric-box">
-                <span class="metric-title">Consulting Value Delivered</span>
-                <span class="metric-val">$12.4M</span>
-                <span class="metric-trend text-success">&#8593; 28% this quarter</span>
+                <span class="metric-title">Deployment Target</span>
+                <span class="metric-val text-success">AWS EC2</span>
+                <span class="metric-trend text-muted">Via Systems Manager (SSM)</span>
               </div>
               <div class="metric-box">
-                <span class="metric-title">Active Engagements</span>
-                <span class="metric-val">42</span>
-                <span class="metric-trend text-info">All Sectors</span>
+                <span class="metric-title">Database Storage</span>
+                <span class="metric-val text-info" id="hero-db-status">MySQL 8.0</span>
+                <span class="metric-trend text-success">Parameterized Persistence</span>
               </div>
             </div>
             <div class="card-progress-section">
               <div class="progress-info">
-                <span>Transformation Roadmaps on Track</span>
-                <span class="fw-bold">96%</span>
+                <span>CI/CD Pipeline Verification Score</span>
+                <span class="fw-bold text-success">100% Passed</span>
               </div>
               <div class="progress-bar">
-                <div class="progress-fill" style="width: 96%;"></div>
+                <div class="progress-fill" style="width: 100%;"></div>
+              </div>
+              <div class="platform-tags">
+                <span class="tech-tag">pytest</span>
+                <span class="tech-tag">SonarQube</span>
+                <span class="tech-tag">Trivy</span>
+                <span class="tech-tag">Docker</span>
+                <span class="tech-tag">AWS ECR</span>
+                <span class="tech-tag">Prometheus</span>
               </div>
             </div>
           </div>
@@ -149,8 +171,8 @@
               </svg>
             </div>
             <div>
-              <p class="floating-title">100% Pro-Bono Model</p>
-              <p class="floating-sub">No retainers, no hourly invoices</p>
+              <p class="floating-title">Zero-Trust Security Baseline</p>
+              <p class="floating-sub">Continuous SAST &amp; container image vulnerability audits</p>
             </div>
           </div>
         </div>
@@ -164,7 +186,7 @@
           <span class="section-tag">About ABC Free Consultants</span>
           <h2 class="section-title">Democratizing Elite Advisory for Modern Business</h2>
           <p class="section-description">
-            We bridge the gap between emerging enterprises and top-tier strategic management. Our mission is to remove cost barriers and deliver actionable, data-backed consulting.
+            We bridge the gap between emerging enterprises and top-tier strategic management. Our mission is to remove cost barriers and deliver actionable, data-backed consulting supported by enterprise-grade technology.
           </p>
         </div>
 
@@ -175,7 +197,7 @@
               Founded on the belief that strategic excellence should not be reserved only for Fortune 500 balance sheets, <strong>ABC Free Consultants</strong> provides pro-bono, institutional-grade guidance across corporate strategy, cloud modernization, and operational efficiency.
             </p>
             <p>
-              Our multidisciplinary advisory council brings decades of collective leadership from leading management firms, hyper-growth tech innovators, and global financial institutions.
+              As the flagship client application for this <em>Cloud-Based DevSecOps Platform</em>, our production delivery is fully automated, secure, and monitored from code commit to cloud deployment.
             </p>
 
             <div class="about-highlights">
@@ -188,7 +210,7 @@
                 </div>
                 <div>
                   <h4>Zero-Cost Philosophy</h4>
-                  <p>Sponsored through enterprise innovation grants and philanthropic initiatives.</p>
+                  <p>Sponsored through enterprise innovation grants and philanthropic technology initiatives.</p>
                 </div>
               </div>
 
@@ -389,6 +411,324 @@
       </div>
     </section>
 
+    <!-- NEW SECTION: DevSecOps Platform Architecture & Infrastructure -->
+    <section class="section arch-section" id="architecture">
+      <div class="container">
+        <div class="section-header text-center">
+          <span class="section-tag">Platform Engineering</span>
+          <h2 class="section-title">DevSecOps Architecture &amp; System Flow</h2>
+          <p class="section-description">
+            Complete end-to-end blueprint of our Cloud-Based DevSecOps Platform. Every release is automatically tested, scanned, packaged, deployed to AWS EC2, and monitored with Prometheus and Grafana.
+          </p>
+        </div>
+
+        <!-- Interactive Architecture Flow Diagram -->
+        <div class="arch-flow-wrapper">
+          <div class="arch-stages-grid">
+            <!-- Stage 1 -->
+            <div class="arch-stage-card">
+              <div class="stage-badge">01 &bull; Source</div>
+              <div class="stage-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2">
+                  <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+                </svg>
+              </div>
+              <h4 class="stage-title">Developer &amp; GitHub</h4>
+              <p class="stage-text">Code pushed to <code>main</code> branch triggers automated GitHub Actions workflow on Windows self-hosted runner.</p>
+              <div class="stage-tags">
+                <span class="badge badge-subtle">Git</span>
+                <span class="badge badge-subtle">GitHub</span>
+              </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arch-arrow">&#10230;</div>
+
+            <!-- Stage 2 -->
+            <div class="arch-stage-card">
+              <div class="stage-badge">02 &bull; Test &amp; SAST</div>
+              <div class="stage-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+              </div>
+              <h4 class="stage-title">pytest &amp; SonarQube</h4>
+              <p class="stage-text">Runs automated unit tests with pytest, followed by SonarScanner SAST code quality &amp; bug inspection.</p>
+              <div class="stage-tags">
+                <span class="badge badge-subtle">pytest</span>
+                <span class="badge badge-subtle">SonarQube</span>
+              </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arch-arrow">&#10230;</div>
+
+            <!-- Stage 3 -->
+            <div class="arch-stage-card">
+              <div class="stage-badge">03 &bull; Security</div>
+              <div class="stage-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+              </div>
+              <h4 class="stage-title">Aqua Trivy Scanning</h4>
+              <p class="stage-text">Deep scanning of filesystem, Python dependencies, and Docker container images for CVE vulnerabilities.</p>
+              <div class="stage-tags">
+                <span class="badge badge-subtle">Trivy</span>
+                <span class="badge badge-subtle">CVE Gate</span>
+              </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arch-arrow">&#10230;</div>
+
+            <!-- Stage 4 -->
+            <div class="arch-stage-card">
+              <div class="stage-badge">04 &bull; Package</div>
+              <div class="stage-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6366F1" stroke-width="2">
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                  <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                  <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                </svg>
+              </div>
+              <h4 class="stage-title">Docker &amp; AWS ECR</h4>
+              <p class="stage-text">Hardened Alpine container built and pushed securely to private AWS Elastic Container Registry.</p>
+              <div class="stage-tags">
+                <span class="badge badge-subtle">Docker</span>
+                <span class="badge badge-subtle">AWS ECR</span>
+              </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arch-arrow">&#10230;</div>
+
+            <!-- Stage 5 -->
+            <div class="arch-stage-card">
+              <div class="stage-badge">05 &bull; CD Deploy</div>
+              <div class="stage-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#EC4899" stroke-width="2">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+              </div>
+              <h4 class="stage-title">AWS SSM &amp; EC2</h4>
+              <p class="stage-text">Zero-SSH remote automated deployment executed via AWS Systems Manager onto Amazon Linux 2023 EC2 host.</p>
+              <div class="stage-tags">
+                <span class="badge badge-subtle">AWS SSM</span>
+                <span class="badge badge-subtle">Amazon EC2</span>
+              </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arch-arrow">&#10230;</div>
+
+            <!-- Stage 6 -->
+            <div class="arch-stage-card">
+              <div class="stage-badge">06 &bull; Runtime &amp; Telemetry</div>
+              <div class="stage-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#06B6D4" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="12"></line>
+                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+              </div>
+              <h4 class="stage-title">Nginx, MySQL &amp; Grafana</h4>
+              <p class="stage-text">Nginx proxies to Flask backend backed by MySQL database. Prometheus scrapes metrics for Grafana visualization.</p>
+              <div class="stage-tags">
+                <span class="badge badge-subtle">Nginx</span>
+                <span class="badge badge-subtle">MySQL</span>
+                <span class="badge badge-subtle">Prometheus</span>
+                <span class="badge badge-subtle">Grafana</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Architecture Feature Breakdown Cards -->
+        <div class="arch-details-grid">
+          <div class="arch-detail-card">
+            <h4>Security-First Pipeline</h4>
+            <p>Every commit must pass unit tests, static code analysis with SonarQube, and container vulnerability audits before an image is pushed to AWS ECR.</p>
+          </div>
+          <div class="arch-detail-card">
+            <h4>Zero-SSH Immutable Deployment</h4>
+            <p>Deployments execute without exposing open SSH ports (Port 22 closed), leveraging AWS Systems Manager (SSM) Run Command with IAM role enforcement.</p>
+          </div>
+          <div class="arch-detail-card">
+            <h4>Relational Persistence &amp; Fallback</h4>
+            <p>Client requests persist to MySQL 8.0 with parameterized SQL statements. In offline scenarios, the system gracefully shifts to an in-memory circuit breaker.</p>
+          </div>
+          <div class="arch-detail-card">
+            <h4>Full-Stack Telemetry</h4>
+            <p>Real-time metrics exposed via <code>/metrics</code>, scraped every 15s by Prometheus, and rendered into executive Grafana monitoring dashboards.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW SECTION: Visual CI/CD Pipeline Breakdown -->
+    <section class="section pipeline-section" id="pipeline">
+      <div class="container">
+        <div class="section-header text-center">
+          <span class="section-tag">Continuous Delivery</span>
+          <h2 class="section-title">Automated CI/CD Workflow Stages</h2>
+          <p class="section-description">
+            Live execution pipeline breakdown running on the self-hosted Windows runner executing through GitHub Actions.
+          </p>
+        </div>
+
+        <div class="pipeline-track">
+          <div class="pipeline-step-box step-passed">
+            <div class="step-header">
+              <span class="step-num">Step 1</span>
+              <span class="step-status">Success &#10003;</span>
+            </div>
+            <h4>Environment &amp; Setup</h4>
+            <p>Windows PowerShell environment checkout, Python 3.14 validation, pip dependency installation.</p>
+            <div class="step-meta">Runner: Self-Hosted Windows</div>
+          </div>
+
+          <div class="pipeline-step-box step-passed">
+            <div class="step-header">
+              <span class="step-num">Step 2</span>
+              <span class="step-status">Success &#10003;</span>
+            </div>
+            <h4>Unit &amp; Endpoint Tests</h4>
+            <p>pytest execution covering home, health, static assets, telemetry APIs, and consultation validation.</p>
+            <div class="step-meta">Framework: pytest 9.1.1</div>
+          </div>
+
+          <div class="pipeline-step-box step-passed">
+            <div class="step-header">
+              <span class="step-num">Step 3</span>
+              <span class="step-status">Success &#10003;</span>
+            </div>
+            <h4>Static Code Analysis (SAST)</h4>
+            <p>SonarScanner analysis verifying code quality, test coverage, maintainability, and security hotspots.</p>
+            <div class="step-meta">Platform: SonarQube Server</div>
+          </div>
+
+          <div class="pipeline-step-box step-passed">
+            <div class="step-header">
+              <span class="step-num">Step 4</span>
+              <span class="step-status">Success &#10003;</span>
+            </div>
+            <h4>Vulnerability Scanning</h4>
+            <p>Aqua Security Trivy scans filesystem, dependencies, and built Docker image for HIGH/CRITICAL CVEs.</p>
+            <div class="step-meta">Scanner: Trivy CLI (Windows)</div>
+          </div>
+
+          <div class="pipeline-step-box step-passed">
+            <div class="step-header">
+              <span class="step-num">Step 5</span>
+              <span class="step-status">Success &#10003;</span>
+            </div>
+            <h4>Container Packaging &amp; Push</h4>
+            <p>Docker container build with Alpine base, tagged with commit SHA and latest, pushed to AWS ECR.</p>
+            <div class="step-meta">Registry: AWS ECR Private</div>
+          </div>
+
+          <div class="pipeline-step-box step-passed">
+            <div class="step-header">
+              <span class="step-num">Step 6</span>
+              <span class="step-status">Success &#10003;</span>
+            </div>
+            <h4>Remote SSM Deploy &amp; Health</h4>
+            <p>AWS Systems Manager executes zero-downtime pull, container restart, and performs <code>/health</code> verification.</p>
+            <div class="step-meta">Target: AWS EC2 (Amazon Linux 2023)</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW SECTION: Live Telemetry & Platform Monitoring -->
+    <section class="section telemetry-section" id="telemetry">
+      <div class="container">
+        <div class="section-header text-center">
+          <span class="section-tag">Observability</span>
+          <h2 class="section-title">Live Platform Telemetry &amp; Monitoring</h2>
+          <p class="section-description">
+            Live telemetry fetched dynamically from the running backend via <code>/api/status</code>, <code>/health</code>, and <code>/metrics</code>.
+          </p>
+        </div>
+
+        <div class="telemetry-dashboard-card">
+          <div class="telemetry-header">
+            <div class="telemetry-title-group">
+              <span class="pulse-indicator"></span>
+              <h3>Platform Status: <span class="text-success" id="telemetry-status-text">ONLINE &amp; HEALTHY</span></h3>
+            </div>
+            <button class="btn btn-outline btn-sm" id="refresh-telemetry-btn" title="Refresh Telemetry">
+              <span>&#8635; Refresh Live Telemetry</span>
+            </button>
+          </div>
+
+          <!-- Live Metrics Grid -->
+          <div class="telemetry-grid">
+            <div class="telemetry-widget">
+              <span class="widget-label">Application Service</span>
+              <span class="widget-value" id="telem-service">devsecops-platform</span>
+              <span class="widget-sub" id="telem-version">Version: v1.0.1-production</span>
+            </div>
+
+            <div class="telemetry-widget">
+              <span class="widget-label">Database Connection</span>
+              <span class="widget-value text-success" id="telem-db-status">MySQL Connected</span>
+              <span class="widget-sub" id="telem-db-details">Host: mysql:3306 (PyMySQL)</span>
+            </div>
+
+            <div class="telemetry-widget">
+              <span class="widget-label">Consultations Stored</span>
+              <span class="widget-value text-info" id="telem-consultations-count">Loading...</span>
+              <span class="widget-sub">Persistent MySQL Table</span>
+            </div>
+
+            <div class="telemetry-widget">
+              <span class="widget-label">Application Uptime</span>
+              <span class="widget-value" id="telem-uptime">Calculating...</span>
+              <span class="widget-sub">Continuous Active Execution</span>
+            </div>
+
+            <div class="telemetry-widget">
+              <span class="widget-label">Prometheus Metric Scraper</span>
+              <span class="widget-value text-success">Healthy (15s scrape)</span>
+              <span class="widget-sub"><a href="/metrics" target="_blank" rel="noopener noreferrer">View Raw /metrics &#8599;</a></span>
+            </div>
+
+            <div class="telemetry-widget">
+              <span class="widget-label">Grafana Dashboards</span>
+              <span class="widget-value text-info">Port 3000 Provisioned</span>
+              <span class="widget-sub">Automated Dashboard &amp; Alerting</span>
+            </div>
+          </div>
+
+          <!-- Endpoints Quick Bar -->
+          <div class="telemetry-footer-bar">
+            <span class="telemetry-footer-title">Verified Telemetry Endpoints:</span>
+            <div class="endpoint-badges">
+              <a href="/health" class="ep-badge" target="_blank" rel="noopener noreferrer">
+                <span class="ep-method">GET</span> /health
+              </a>
+              <a href="/api/status" class="ep-badge" target="_blank" rel="noopener noreferrer">
+                <span class="ep-method">GET</span> /api/status
+              </a>
+              <a href="/api/contact" class="ep-badge" target="_blank" rel="noopener noreferrer">
+                <span class="ep-method">GET</span> /api/contact
+              </a>
+              <a href="/metrics" class="ep-badge" target="_blank" rel="noopener noreferrer">
+                <span class="ep-method">GET</span> /metrics
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Why Choose Us Section -->
     <section class="section why-us-section" id="why-us">
       <div class="container">
@@ -454,7 +794,7 @@
           <span class="section-tag">Get In Touch</span>
           <h2 class="section-title">Schedule Your Free Consultation</h2>
           <p class="section-description">
-            Fill out the form below and an industry-specialized advisor will connect with you within 24 business hours.
+            Fill out the form below. Your request will be securely processed and saved directly into our MySQL database.
           </p>
         </div>
 
@@ -512,10 +852,11 @@
                   <span class="status-heading">Platform Systems Operational</span>
                 </div>
                 <p class="status-text">
-                  Application hosted on AWS EC2 behind Nginx reverse proxy. Monitored in real-time by Prometheus &amp; Grafana.
+                  Application hosted on AWS EC2 behind Nginx reverse proxy. Monitored in real-time by Prometheus &amp; Grafana with MySQL persistence.
                 </p>
                 <div class="status-actions">
                   <a href="/health" class="status-badge-link" target="_blank" rel="noopener noreferrer">/health</a>
+                  <a href="/api/status" class="status-badge-link" target="_blank" rel="noopener noreferrer">/api/status</a>
                   <a href="/metrics" class="status-badge-link" target="_blank" rel="noopener noreferrer">/metrics</a>
                 </div>
               </div>
@@ -572,7 +913,7 @@
                 </button>
               </div>
               <p class="form-disclaimer">
-                We respect your privacy. No spam, no sales calls, no charges guaranteed.
+                Data persists securely into MySQL. Parameterized SQL queries defend against injection vulnerabilities.
               </p>
             </form>
           </div>
@@ -610,7 +951,9 @@
             <li><a href="#home">Home</a></li>
             <li><a href="#about">About Us</a></li>
             <li><a href="#services">Services</a></li>
-            <li><a href="#why-us">Why Choose Us</a></li>
+            <li><a href="#architecture">Architecture</a></li>
+            <li><a href="#pipeline">CI/CD Pipeline</a></li>
+            <li><a href="#telemetry">Live Telemetry</a></li>
             <li><a href="#contact">Contact</a></li>
           </ul>
         </div>
@@ -630,9 +973,10 @@
           <h4>Platform Telemetry</h4>
           <ul class="footer-nav">
             <li><a href="/health" target="_blank" rel="noopener noreferrer">Health Check API (/health)</a></li>
+            <li><a href="/api/status" target="_blank" rel="noopener noreferrer">Platform Telemetry (/api/status)</a></li>
             <li><a href="/metrics" target="_blank" rel="noopener noreferrer">Prometheus Metrics (/metrics)</a></li>
             <li><span class="footer-env">Environment: Production (AWS EC2)</span></li>
-            <li><span class="footer-env">Version: 1.0.0</span></li>
+            <li><span class="footer-env">Release: v1.0.1-production</span></li>
           </ul>
         </div>
       </div>
@@ -642,7 +986,7 @@
           &copy; 2026 ABC Free Consultants. All rights reserved. Delivered securely via Cloud-Based DevSecOps Platform.
         </p>
         <p class="disclaimer-note">
-          Demonstration Client Application for Automated DevSecOps Deployment.
+          Final-Year BCA Project: Cloud-Based DevSecOps Platform for Automated Application Deployment and Monitoring.
         </p>
       </div>
     </div>

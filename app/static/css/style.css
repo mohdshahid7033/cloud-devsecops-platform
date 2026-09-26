@@ -1279,6 +1279,402 @@ textarea.form-control {
   }
 }
 
+/* --------------------------------------------------------------------------
+   Platform Architecture, CI/CD Pipeline & Live Telemetry Styles
+   -------------------------------------------------------------------------- */
+.ci-links-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.platform-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.tech-tag {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  background: rgba(30, 64, 175, 0.08);
+  color: var(--brand-blue);
+  border: 1px solid rgba(30, 64, 175, 0.2);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+
+.arch-section {
+  background: linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.arch-flow-wrapper {
+  margin-top: 2.5rem;
+  overflow-x: auto;
+  padding-bottom: 1rem;
+}
+
+.arch-stages-grid {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  min-width: 950px;
+}
+
+.arch-stage-card {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  position: relative;
+}
+
+.arch-stage-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--brand-sky);
+}
+
+.stage-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--brand-blue);
+  margin-bottom: 0.75rem;
+  display: inline-block;
+}
+
+.stage-icon {
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.stage-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 0.5rem;
+}
+
+.stage-text {
+  font-size: 0.825rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-bottom: 1rem;
+  flex-grow: 1;
+}
+
+.stage-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.badge-subtle {
+  background: var(--primary-100);
+  color: var(--primary-700);
+  padding: 0.15rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+.arch-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-400);
+  font-size: 1.25rem;
+  user-select: none;
+}
+
+.arch-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.arch-detail-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.arch-detail-card h4 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 0.5rem;
+}
+
+.arch-detail-card p {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Pipeline Track */
+.pipeline-section {
+  background: var(--bg-surface);
+}
+
+.pipeline-track {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.pipeline-step-box {
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  position: relative;
+  border-left: 4px solid var(--brand-emerald);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.pipeline-step-box:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.step-num {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
+.step-status {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--brand-emerald);
+  background: rgba(16, 185, 129, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-full);
+}
+
+.pipeline-step-box h4 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 0.4rem;
+}
+
+.pipeline-step-box p {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-bottom: 0.75rem;
+}
+
+.step-meta {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  color: var(--primary-600);
+  background: var(--primary-50);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  display: inline-block;
+}
+
+/* Telemetry Dashboard */
+.telemetry-section {
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.telemetry-section .section-title {
+  color: #ffffff;
+}
+
+.telemetry-section .section-description {
+  color: #94a3b8;
+}
+
+.telemetry-section .section-tag {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+}
+
+.telemetry-dashboard-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
+  margin-top: 2rem;
+}
+
+.telemetry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #334155;
+}
+
+.telemetry-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pulse-indicator {
+  width: 12px;
+  height: 12px;
+  background: #10b981;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: pulseRing 2s infinite;
+}
+
+@keyframes pulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  margin: 1.75rem 0;
+}
+
+.telemetry-widget {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+}
+
+.widget-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.25rem;
+  font-family: var(--font-mono);
+}
+
+.widget-sub {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.widget-sub a {
+  color: #38bdf8;
+  text-decoration: underline;
+}
+
+.telemetry-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #334155;
+}
+
+.telemetry-footer-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.endpoint-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ep-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.ep-badge:hover {
+  border-color: #38bdf8;
+  background: #1e293b;
+  color: #38bdf8;
+}
+
+.ep-method {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 0.1rem 0.3rem;
+  background: rgba(14, 165, 233, 0.2);
+  color: #38bdf8;
+  border-radius: 3px;
+}
+
+.text-warning {
+  color: #f59e0b !important;
+}
+
+.ref-badge {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ref-storage {
+  display: inline-block;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
 @media (max-width: 768px) {
   .section {
     padding: 4rem 0;
@@ -1365,4 +1761,22 @@ textarea.form-control {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .ci-links-group {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .pipeline-track {
+    grid-template-columns: 1fr;
+  }
+
+  .telemetry-dashboard-card {
+    padding: 1.25rem;
+  }
+
+  .telemetry-grid {
+    grid-template-columns: 1fr;
+  }
 }
+

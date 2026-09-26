@@ -23,11 +23,11 @@
   "panels": [
     {
       "id": 1,
-      "title": "HTTP Request Count",
-      "type": "timeseries",
+      "title": "Application Uptime Status",
+      "type": "stat",
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 4,
+        "w": 6,
         "x": 0,
         "y": 0
       },
@@ -42,7 +42,271 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "flask_http_request_total",
+          "expr": "up{job=\"devsecops-app\"}",
+          "instant": true,
+          "legendFormat": "App Target",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN / UNHEALTHY",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "LIVE & HEALTHY",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "title": "MySQL Database Connectivity",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "devsecops_database_up or vector(0)",
+          "instant": true,
+          "legendFormat": "MySQL Status",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OFFLINE / FALLBACK",
+                  "color": "orange"
+                },
+                "1": {
+                  "text": "CONNECTED (MYSQL)",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Total HTTP Requests",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(flask_http_request_total) or vector(0)",
+          "instant": true,
+          "legendFormat": "Requests",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Current Request Throughput",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(flask_http_request_total[1m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "Req / sec",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "HTTP Request Count (Cumulative)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "flask_http_request_total or vector(0)",
           "instant": false,
           "legendFormat": "{{method}} {{status}}",
           "range": true,
@@ -76,7 +340,7 @@
               "type": "linear"
             },
             "showPoints": "auto",
-            "spanNulls": false,
+            "spanNulls": true,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -113,14 +377,14 @@
       }
     },
     {
-      "id": 2,
-      "title": "HTTP Request Rate",
+      "id": 6,
+      "title": "HTTP Request Rate (req/sec)",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -133,7 +397,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "rate(flask_http_request_total[5m])",
+          "expr": "rate(flask_http_request_total[1m]) or vector(0)",
           "instant": false,
           "legendFormat": "{{method}} {{status}}",
           "range": true,
@@ -167,7 +431,7 @@
               "type": "linear"
             },
             "showPoints": "auto",
-            "spanNulls": false,
+            "spanNulls": true,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -204,14 +468,14 @@
       }
     },
     {
-      "id": 3,
+      "id": 7,
       "title": "Average HTTP Response Time",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -224,7 +488,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "rate(flask_http_request_duration_seconds_sum[5m]) / rate(flask_http_request_duration_seconds_count[5m])",
+          "expr": "(rate(flask_http_request_duration_seconds_sum[1m]) / rate(flask_http_request_duration_seconds_count[1m])) or vector(0)",
           "instant": false,
           "legendFormat": "{{method}} {{status}}",
           "range": true,
@@ -258,7 +522,7 @@
               "type": "linear"
             },
             "showPoints": "auto",
-            "spanNulls": false,
+            "spanNulls": true,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -295,14 +559,14 @@
       }
     },
     {
-      "id": 4,
-      "title": "HTTP Requests by Status",
+      "id": 8,
+      "title": "HTTP Requests by Status Code",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -315,9 +579,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (rate(flask_http_request_total[5m]))",
+          "expr": "sum by (status) (rate(flask_http_request_total[1m])) or vector(0)",
           "instant": false,
-          "legendFormat": "{{status}}",
+          "legendFormat": "HTTP {{status}}",
           "range": true,
           "refId": "A"
         }
@@ -349,7 +613,7 @@
               "type": "linear"
             },
             "showPoints": "auto",
-            "spanNulls": false,
+            "spanNulls": true,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -386,13 +650,14 @@
       }
     }
   ],
-  "refresh": "10s",
+  "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
   "tags": [
     "devsecops",
     "flask",
-    "prometheus"
+    "prometheus",
+    "mysql"
   ],
   "time": {
     "from": "now-15m",
@@ -410,5 +675,5 @@
   "timezone": "browser",
   "title": "DevSecOps Application Monitoring",
   "uid": "devsecops-app-monitoring",
-  "version": 1
+  "version": 2
 }

@@ -1,4 +1,28 @@
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: devsecops-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: devsecops_root_pass
+      MYSQL_DATABASE: devsecops_db
+      MYSQL_USER: devsecops_user
+      MYSQL_PASSWORD: devsecops_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - devsecops-mysql-data:/var/lib/mysql
+    networks:
+      devsecops-network:
+        aliases:
+          - mysql
+          - devsecops-mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pdevsecops_root_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   app:
     build:
       context: .
@@ -6,6 +30,23 @@ services:
     container_name: devsecops-app
     expose:
       - "5000"
+    ports:
+      - "5000:5000"
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=devsecops_user
+      - DB_PASSWORD=devsecops_pass
+      - DB_NAME=devsecops_db
+      - APP_ENV=production
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      devsecops-network:
+        aliases:
+          - app
+          - devsecops-app
 
   prometheus:
     image: prom/prometheus:latest
@@ -16,6 +57,11 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+    networks:
+      devsecops-network:
+        aliases:
+          - prometheus
+          - devsecops-prometheus
 
   grafana:
     image: grafana/grafana:latest
@@ -28,6 +74,11 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+    networks:
+      devsecops-network:
+        aliases:
+          - grafana
+          - devsecops-grafana
 
   nginx:
     image: nginx:alpine
@@ -38,7 +89,16 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - app
+    networks:
+      devsecops-network:
+        aliases:
+          - nginx
+          - devsecops-nginx
+
+networks:
+  devsecops-network:
+    driver: bridge
 
 volumes:
   devsecops-grafana-data:
-
+  devsecops-mysql-data:
