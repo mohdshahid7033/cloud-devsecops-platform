@@ -116,10 +116,6 @@ jobs:
           $trivyCmd = if (Get-Command trivy -ErrorAction SilentlyContinue) { "trivy" } else { "C:\trivy\trivy.exe" }
           & $trivyCmd image --format table --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore devsecops-platform:latest
 
-      - name: Check AWS CLI
-        shell: powershell
-        run: |
-          aws --version
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -143,14 +139,21 @@ jobs:
           $commands = @(
             'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com',
             'docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest',
+            'docker network create devsecops-network || true',
+            'docker volume create devsecops-mysql-data || true',
+            'docker volume create devsecops-prometheus-data || true',
+            'docker volume create devsecops-grafana-data || true',
+            'DB_NAME=$(aws ssm get-parameter --name "/devsecops/db_name" --query "Parameter.Value" --output text --region ap-south-1)',
+            'DB_USER=$(aws ssm get-parameter --name "/devsecops/db_user" --query "Parameter.Value" --output text --region ap-south-1)',
+            'DB_PASSWORD=$(aws ssm get-parameter --name "/devsecops/db_password" --with-decryption --query "Parameter.Value" --output text --region ap-south-1)',
+            'DB_ROOT_PASSWORD=$(aws ssm get-parameter --name "/devsecops/db_root_password" --with-decryption --query "Parameter.Value" --output text --region ap-south-1)',
+            'if ! docker ps --filter "name=devsecops-mysql" --filter "status=running" -q | grep -q .; then docker stop devsecops-mysql || true; docker rm devsecops-mysql || true; docker run -d --name devsecops-mysql --network devsecops-network --restart always -v devsecops-mysql-data:/var/lib/mysql -e MYSQL_DATABASE="$DB_NAME" -e MYSQL_USER="$DB_USER" -e MYSQL_PASSWORD="$DB_PASSWORD" -e MYSQL_ROOT_PASSWORD="$DB_ROOT_PASSWORD" mysql:8.0 --performance-schema=OFF --innodb-buffer-pool-size=64M --innodb-log-buffer-size=2M --max-connections=30; fi',
+            'for i in $(seq 1 30); do if docker exec devsecops-mysql mysqladmin ping -h localhost -u root -p"$DB_ROOT_PASSWORD" --silent; then echo "MySQL is ready"; break; fi; echo "Waiting for MySQL... ($i/30)"; sleep 2; done',
             'docker stop devsecops-app || true',
             'docker rm devsecops-app || true',
-            'docker network create devsecops-network || true',
-            'docker run -d --name devsecops-app --network devsecops-network 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest',
+            'docker run -d --name devsecops-app --network devsecops-network --restart always -e FLASK_ENV=production -e APP_ENV=production -e DB_HOST=devsecops-mysql -e DB_PORT=3306 -e DB_NAME="$DB_NAME" -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest',
             'echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf',
-            'docker stop devsecops-nginx || true',
-            'docker rm devsecops-nginx || true',
-            'docker run -d --name devsecops-nginx --network devsecops-network -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine',
+            'if ! docker ps --filter "name=devsecops-nginx" --filter "status=running" -q | grep -q .; then docker stop devsecops-nginx || true; docker rm devsecops-nginx || true; docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine; fi',
             'echo Z2xvYmFsOgogIHNjcmFwZV9pbnRlcnZhbDogMTVzCgpzY3JhcGVfY29uZmlnczoKICAtIGpvYl9uYW1lOiAiZGV2c2Vjb3BzLWFwcCIKICAgIHN0YXRpY19jb25maWdzOgogICAgICAtIHRhcmdldHM6IFsiZGV2c2Vjb3BzLWFwcDo1MDAwIl0K | base64 -d > /home/ec2-user/prometheus.yml',
             'docker stop devsecops-prometheus || true',
             'docker rm devsecops-prometheus || true',
@@ -167,7 +170,11 @@ jobs:
             'docker run -d --name devsecops-grafana --network devsecops-network -p 3000:3000 -v devsecops-grafana-data:/var/lib/grafana -v /home/ec2-user/grafana/provisioning:/etc/grafana/provisioning:ro -v /home/ec2-user/grafana/dashboards:/var/lib/grafana/dashboards:ro grafana/grafana:latest',
             'sleep 15',
             'docker ps --filter name=devsecops- --format ''{{.Names}}''',
-            'curl -f http://localhost/health',
+            'HEALTH_OUTPUT=$(curl -sf http://localhost/health)',
+            'echo "$HEALTH_OUTPUT"',
+            'echo "$HEALTH_OUTPUT" | grep -q ''"connected":true''',
+            'echo "$HEALTH_OUTPUT" | grep -q ''"mode":"live_mysql"''',
+            'echo "$HEALTH_OUTPUT" | grep -q ''"status":"healthy"''',
             'docker exec devsecops-prometheus wget -qO- http://localhost:9090/api/v1/targets | grep -E ''devsecops-app:5000''',
             'curl -f http://localhost:3000/api/health'
           )
@@ -223,5 +230,32 @@ jobs:
 
           if ($invocation.Status -ne "Success") {
             Write-Error "SSM command failed with status: $($invocation.Status)"
+            exit 1
+          }
+
+      - name: Application health check
+        shell: powershell
+        run: |
+          Write-Host "Verifying production endpoint: http://13.232.174.161/health"
+          $maxAttempts = 12
+          $attempt = 0
+          $healthy = $false
+          while ($attempt -lt $maxAttempts) {
+            $attempt++
+            try {
+              $resp = Invoke-RestMethod -Uri "http://13.232.174.161/health" -TimeoutSec 10 -ErrorAction Stop
+              Write-Host "Attempt $attempt health status: $($resp.status), database connected: $($resp.database.connected), mode: $($resp.database.mode)"
+              if ($resp.status -eq "healthy" -and $resp.database.connected -eq $true -and $resp.database.mode -eq "live_mysql") {
+                $healthy = $true
+                Write-Host "Production health check passed successfully!"
+                break
+              }
+            } catch {
+              Write-Host "Attempt $attempt request error: $_"
+            }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $healthy) {
+            Write-Error "Production health check failed to confirm healthy status and live database connection."
             exit 1
           }

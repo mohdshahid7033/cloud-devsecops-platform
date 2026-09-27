@@ -9,4 +9,8 @@ __pycache__/
 trivy-report.json
 .sonar/
 actions-runner/
+.pytest_cache/
+.venv/
+ssm-commands.json
 .scannerwork/
+test-ssm-commands.json
