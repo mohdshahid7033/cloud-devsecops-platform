@@ -9,11 +9,12 @@ from prometheus_client import REGISTRY, Gauge
 # Support importing database whether running directly (python app.py) or as package (from root)
 try:
     import database
+    import platform_routes
 except ImportError:
     try:
-        from app import database
+        from app import database, platform_routes
     except ImportError:
-        from . import database
+        from . import database, platform_routes
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +25,7 @@ metrics = PrometheusMetrics(app)
 
 # Record application start time for uptime telemetry
 START_TIME = time.time()
+app.start_time = START_TIME
 APP_VERSION = os.getenv("APP_VERSION", "v1.0.1-production")
 
 # Register custom Prometheus Gauge for MySQL Database health (idempotent / reload-safe)
@@ -41,6 +43,9 @@ else:
 # Initialize database schema if MySQL is accessible
 database.init_db()
 
+# Register Unified DevSecOps Platform API Blueprint
+app.register_blueprint(platform_routes.platform_bp)
+
 
 def update_db_metric():
     """Query database status and update Prometheus gauge."""
@@ -52,8 +57,15 @@ def update_db_metric():
 
 @app.route("/", methods=["GET"])
 def home():
-    """Render the ABC Free Consultants client enterprise website."""
+    """Render the unified DevSecOps platform interface."""
     return render_template("index.html")
+
+
+@app.route("/demo", methods=["GET"])
+@app.route("/client-app", methods=["GET"])
+def client_app():
+    """Render the standalone ABC Free Consultants demo client application."""
+    return render_template("client_app.html")
 
 
 @app.route("/health", methods=["GET"])

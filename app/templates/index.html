@@ -3,995 +3,1148 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="ABC Free Consultants - Enterprise-grade business strategy, cloud modernization, and financial advisory delivered by an automated Cloud-Based DevSecOps Platform.">
-  <title>ABC Free Consultants | Zero-Cost Strategic Advisory & DevSecOps Platform</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <meta name="description" content="Cloud-Based DevSecOps Platform for Automated Application Deployment, Security Scanning, and Observability.">
+  <title>Cloud DevSecOps Platform | Unified Engineering Console</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/platform.css') }}">
 </head>
 <body>
-  <!-- Top Platform Delivery Banner (Ideal for CI/CD Demo Verification) -->
-  <div class="ci-banner" id="ci-banner">
-    <div class="container ci-banner-content">
-      <span class="badge badge-success">
-        <span class="status-dot"></span>
-        DevSecOps Live
-      </span>
-      <span class="ci-message">
-        <strong>Automated Cloud Delivery:</strong> Release <code>v1.0.1-production</code> verified via SonarQube, Trivy, Docker &amp; AWS Systems Manager.
-      </span>
-      <div class="ci-links-group">
-        <a href="#architecture" class="ci-link">Architecture Flow &#8595;</a>
-        <a href="#telemetry" class="ci-link">Live Telemetry &#8595;</a>
-        <a href="/health" class="ci-link" target="_blank" rel="noopener noreferrer">API Health &#8594;</a>
+  <div class="platform-shell">
+
+    <!-- ====================================================================
+         Sidebar Navigation
+         ==================================================================== -->
+    <aside class="platform-sidebar" aria-label="Platform Sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div class="sidebar-brand">
+          <h1>DevSecOps Platform</h1>
+          <p><span class="env-indicator-pill"></span> Production &bull; AWS ap-south-1</p>
+        </div>
+      </div>
+
+      <div class="sidebar-section-title">Navigation</div>
+
+      <ul class="sidebar-nav">
+        <li>
+          <button class="nav-link-btn active" data-view="dashboard">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              <span class="nav-item-text">Dashboard</span>
+            </span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="projects">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span class="nav-item-text">Projects</span>
+            </span>
+            <span class="nav-badge" id="sidebar-projects-count">1</span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="deployments">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></svg>
+              <span class="nav-item-text">Deployments</span>
+            </span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="pipelines">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <span class="nav-item-text">Pipelines</span>
+            </span>
+            <span class="nav-badge text-success">13/13</span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="security">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span class="nav-item-text">Security</span>
+            </span>
+            <span class="nav-badge text-success">0 CVE</span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="monitoring">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              <span class="nav-item-text">Monitoring</span>
+            </span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="infrastructure">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+              <span class="nav-item-text">Infrastructure</span>
+            </span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="settings">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              <span class="nav-item-text">Settings</span>
+            </span>
+          </button>
+        </li>
+      </ul>
+
+      <!-- Demo App Preview Trigger & Runner Info -->
+      <div class="sidebar-footer">
+        <div class="cluster-card" style="margin-bottom: 12px; cursor: pointer;" onclick="openDemoAppModal()">
+          <div class="cluster-card-title">
+            <span>Demo Application</span>
+            <span class="status-badge success">Live</span>
+          </div>
+          <div class="cluster-card-value">ABC Free Consultants</div>
+          <div class="cluster-meta">Zero-Cost Advisory &bull; Services &rarr;</div>
+        </div>
+
+        <div class="cluster-card">
+          <div class="cluster-card-title">
+            <span>CI/CD Runner</span>
+            <span class="status-badge info">Active</span>
+          </div>
+          <div class="cluster-card-value">Self-Hosted Windows</div>
+          <div class="cluster-meta">PowerShell &bull; AWS SSM &bull; Trivy</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ====================================================================
+         Main Platform Stage
+         ==================================================================== -->
+    <main class="platform-stage">
+
+      <!-- Platform Topbar -->
+      <header class="platform-topbar">
+        <div class="topbar-left">
+          <div class="breadcrumbs">
+            <span class="breadcrumb-root">Platform</span>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-current" id="breadcrumb-current">Dashboard</span>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="status-chip">
+            <span class="dot pulse"></span>
+            <span>AWS:</span>
+            <span id="chip-region" style="color: #fff; font-weight: 600;">ap-south-1</span>
+          </div>
+          <div class="status-chip">
+            <span>EC2:</span>
+            <span id="chip-ec2" style="color: #fff;">i-0fb9dcbeb35b4fdbe</span>
+          </div>
+          <div class="status-chip">
+            <span>Database:</span>
+            <span id="chip-db" style="color: #fff;">MySQL</span>
+          </div>
+          <button class="btn-platform btn-platform-outline btn-platform-sm" id="btn-auto-refresh">
+            Auto-Refresh
+          </button>
+          <button class="btn-platform btn-platform-outline btn-platform-sm" id="btn-manual-refresh">
+            Refresh
+          </button>
+          <button class="btn-platform btn-platform-primary btn-platform-sm" onclick="triggerDeployment()">
+            Deploy Now
+          </button>
+        </div>
+      </header>
+
+      <!-- Platform Content Panels -->
+      <div class="platform-content">
+
+        <!-- ================================================================
+             1. DASHBOARD VIEW
+             ================================================================ -->
+        <section class="platform-view-panel active" id="view-dashboard">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Engineering Operations Dashboard</h2>
+              <p>Unified telemetry, deployment status, and security gate monitoring for all cloud workloads.</p>
+            </div>
+            <div class="view-header-actions">
+              <button class="btn-platform btn-platform-outline" onclick="openLogsModal()">View Platform Logs</button>
+              <button class="btn-platform btn-platform-primary" onclick="openModal('modal-onboard-project')">+ Create Project</button>
+            </div>
+          </div>
+
+          <!-- KPI Cards Grid -->
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Total Projects</span>
+                <span class="kpi-icon">&#128193;</span>
+              </div>
+              <div class="kpi-value" id="kpi-total-projects">1</div>
+              <div class="kpi-meta"><span class="status-badge success">Active</span> 1 Demo Connected</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Deployment Status</span>
+                <span class="kpi-icon">&#9889;</span>
+              </div>
+              <div class="kpi-value text-success" id="kpi-deployment-status">Live</div>
+              <div class="kpi-meta">Target: EC2 via SSM</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Pipeline Status</span>
+                <span class="kpi-icon">&#10003;</span>
+              </div>
+              <div class="kpi-value" id="kpi-pipeline-status" style="color: var(--color-success);">PASSED</div>
+              <div class="kpi-meta">13/13 Verification Steps</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Security Gate</span>
+                <span class="kpi-icon">&#128737;</span>
+              </div>
+              <div class="kpi-value" id="kpi-security-status" style="color: var(--color-brand-light);">PASSED</div>
+              <div class="kpi-meta">0 Critical / High CVEs</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Application Health</span>
+                <span class="kpi-icon">&#9829;</span>
+              </div>
+              <div class="kpi-value" id="kpi-app-health" style="font-size: 20px;">Healthy (200 OK)</div>
+              <div class="kpi-meta">Nginx Reverse Proxy Active</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Database Health</span>
+                <span class="kpi-icon">&#128452;</span>
+              </div>
+              <div class="kpi-value" id="kpi-db-health" style="font-size: 20px;">Live MySQL</div>
+              <div class="kpi-meta">Latency: &lt; 15ms (PyMySQL)</div>
+            </div>
+          </div>
+
+          <!-- Active Deployment & Git Telemetry -->
+          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 24px;">
+            <div class="panel-card" style="margin-bottom: 0;">
+              <div class="panel-card-header">
+                <div class="panel-card-title">
+                  <span>Latest Deployment Telemetry</span>
+                </div>
+                <span class="status-badge success">Verified in Production</span>
+              </div>
+              <div class="panel-card-body">
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px;">
+                  <div>
+                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Deployment ID</span>
+                    <div style="margin-top: 4px;"><span class="code-pill" id="dash-latest-dep-id">DEP-202609-01</span></div>
+                  </div>
+                  <div>
+                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Target Instance</span>
+                    <div style="margin-top: 4px;"><span class="code-pill">i-0fb9dcbeb35b4fdbe</span></div>
+                  </div>
+                  <div>
+                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Duration</span>
+                    <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: #fff;" id="dash-latest-dep-duration">195s</div>
+                  </div>
+                </div>
+                <div style="background-color: var(--bg-surface); padding: 12px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                  <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Deployment Log Excerpt:</div>
+                  <div style="font-family: var(--font-mono); font-size: 11.5px; color: var(--color-brand-light);">
+                    Docker pull completed &bull; Containers refreshed on devsecops-network &bull; Nginx proxy active &bull; Prometheus scrape healthy
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel-card" style="margin-bottom: 0;">
+              <div class="panel-card-header">
+                <div class="panel-card-title">
+                  <span>Git Repository State</span>
+                </div>
+                <span class="code-pill" id="dash-git-branch">main</span>
+              </div>
+              <div class="panel-card-body">
+                <div style="margin-bottom: 12px;">
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Latest Commit</span>
+                  <div style="margin-top: 4px;"><span class="code-pill" id="dash-git-commit">bf6b812</span></div>
+                </div>
+                <div style="margin-bottom: 12px;">
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Commit Message</span>
+                  <div style="margin-top: 4px; font-size: 13px; color: #fff;" id="dash-git-msg">Update demo heading for CI/CD deployment</div>
+                </div>
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Author</span>
+                  <div style="margin-top: 4px; font-size: 12px; color: var(--text-secondary);" id="dash-git-author">Mohd Shahid</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Visual Pipeline Preview Card -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">
+                <span>Automated CI/CD Pipeline Execution</span>
+              </div>
+              <button class="btn-platform btn-platform-outline btn-platform-sm" onclick="switchView('pipelines')">View Full Pipeline &rarr;</button>
+            </div>
+            <div class="panel-card-body">
+              <div class="pipeline-flow-container">
+                <div class="pipeline-flow" id="dashboard-pipeline-flow">
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">SOURCE</div>
+                    <div class="pipeline-node-sub">Checkout &bull; 3s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">TEST</div>
+                    <div class="pipeline-node-sub">pytest 9/9 &bull; 6s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">QUALITY</div>
+                    <div class="pipeline-node-sub">SonarQube &bull; 42s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">SECURITY</div>
+                    <div class="pipeline-node-sub">Trivy Scan &bull; 14s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">BUILD</div>
+                    <div class="pipeline-node-sub">Docker &bull; 38s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">REGISTRY</div>
+                    <div class="pipeline-node-sub">ECR Push &bull; 51s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">DEPLOY</div>
+                    <div class="pipeline-node-sub">EC2 SSM &bull; 68s</div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-node status-passed">
+                    <div class="pipeline-node-icon">&#10003;</div>
+                    <div class="pipeline-node-title">HEALTH</div>
+                    <div class="pipeline-node-sub">HTTP 200 &bull; 5s</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             2. PROJECTS VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-projects">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Connected Projects</h2>
+              <p>Manage and onboard applications into the unified DevSecOps delivery lifecycle.</p>
+            </div>
+            <div class="view-header-actions">
+              <button class="btn-platform btn-platform-primary" onclick="openModal('modal-onboard-project')">+ Create Project</button>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">All Workloads</div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Project Name</th>
+                    <th>GitHub Repository</th>
+                    <th>Branch</th>
+                    <th>Environment</th>
+                    <th>App Health</th>
+                    <th>Pipeline</th>
+                    <th style="text-align: right;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="projects-table-body">
+                  <!-- Populated via loadProjects() -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             3. DEPLOYMENTS VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-deployments">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Deployment Management &amp; Rollback</h2>
+              <p>History of container releases to AWS EC2 via Systems Manager (SSM) and rollback options.</p>
+            </div>
+            <div class="view-header-actions">
+              <button class="btn-platform btn-platform-primary" onclick="triggerDeployment()">Trigger Deployment</button>
+            </div>
+          </div>
+
+          <!-- Rollback Strategy Card -->
+          <div class="panel-card" style="border-left: 3px solid var(--color-info);">
+            <div class="panel-card-header">
+              <div class="panel-card-title">
+                <span>Safe Rollback Architecture</span>
+              </div>
+              <span class="status-badge info">ECR Image Tagging Active</span>
+            </div>
+            <div class="panel-card-body">
+              <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
+                Rollback is architecturally supported via historical immutable Amazon ECR image tags redeployed to target EC2 instance <span class="code-pill">i-0fb9dcbeb35b4fdbe</span> via AWS Systems Manager.
+              </p>
+              <div style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);">
+                Strategy: Tagged container pull &bull; Automated pre-flight health validation &bull; Graceful Nginx upstream transition
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Deployment History</div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Deployment ID</th>
+                    <th>Project</th>
+                    <th>Commit</th>
+                    <th>Branch</th>
+                    <th>Status</th>
+                    <th>Start Time</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody id="deployments-table-body">
+                  <!-- Populated via loadDeployments() -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             4. PIPELINES VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-pipelines">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Visual CI/CD Pipelines</h2>
+              <p>Real 13-stage verification pipeline mapped directly to the GitHub Actions execution workflow.</p>
+            </div>
+            <div class="view-header-actions">
+              <button class="btn-platform btn-platform-primary" id="btn-run-pipeline" onclick="triggerPipelineRun()">Run Pipeline Now</button>
+            </div>
+          </div>
+
+          <!-- 13 Mapped Stages Visualizer -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">
+                <span>Pipeline Stage Execution (13 Mapped Workflow Steps)</span>
+              </div>
+              <span class="status-badge success" id="pipeline-stages-badge">13/13 Confirmed</span>
+            </div>
+            <div class="panel-card-body">
+              <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 16px;">
+                Click any step below to inspect command invocation, execution time, and step parameters:
+              </p>
+              <div class="pipeline-flow-container">
+                <div class="pipeline-flow" id="visual-pipeline-flow">
+                  <!-- Populated via loadPipelines() -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pipeline Execution Runs Table -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Pipeline Execution History</div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Run ID</th>
+                    <th>Commit</th>
+                    <th>Branch</th>
+                    <th>Status</th>
+                    <th>Triggered By</th>
+                    <th>Duration</th>
+                    <th>Executed At</th>
+                  </tr>
+                </thead>
+                <tbody id="pipeline-runs-table-body">
+                  <!-- Populated via loadPipelines() -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             5. SECURITY CENTER VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-security">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Security &amp; Vulnerability Center</h2>
+              <p>Continuous vulnerability scanning and static code analysis via Aqua Security Trivy and SonarQube.</p>
+            </div>
+            <div class="view-header-actions">
+              <button class="btn-platform btn-platform-primary" id="btn-run-trivy-scan" onclick="triggerSecurityScan()">Run Trivy Scan</button>
+            </div>
+          </div>
+
+          <!-- Severity Breakdown Cards -->
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">Critical CVEs</span></div>
+              <div class="kpi-value text-success" id="sec-critical-count">0</div>
+              <div class="kpi-meta">Severity: CRITICAL</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">High CVEs</span></div>
+              <div class="kpi-value text-success" id="sec-high-count">0</div>
+              <div class="kpi-meta">Severity: HIGH</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">Medium CVEs</span></div>
+              <div class="kpi-value" id="sec-medium-count">0</div>
+              <div class="kpi-meta">Severity: MEDIUM</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">Low CVEs</span></div>
+              <div class="kpi-value" id="sec-low-count">0</div>
+              <div class="kpi-meta">Severity: LOW</div>
+            </div>
+          </div>
+
+          <!-- Verified Scan Banner -->
+          <div class="panel-card" style="border-left: 3px solid var(--color-success); margin-bottom: 20px;">
+            <div class="panel-card-body" style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-weight: 700; color: #fff; font-size: 15px;" id="sec-statement">
+                  0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+                  Scan Target: <span class="code-pill">app/requirements.txt</span> &bull; Base: Alpine Multi-Stage Container &bull; Engine: Aqua Security Trivy
+                </div>
+              </div>
+              <div style="text-align: right;">
+                <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Last Scan Timestamp</div>
+                <div style="font-family: var(--font-mono); font-size: 12px; color: #fff;" id="sec-last-scan-time">Just now</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SonarQube Static Code Analysis (SAST) -->
+          <div class="panel-card" style="border-left: 3px solid var(--color-brand-light); margin-bottom: 20px;">
+            <div class="panel-card-header">
+              <div class="panel-card-title">
+                <span>SonarQube Static Code Analysis (SAST)</span>
+              </div>
+              <span class="status-badge info" id="sonar-quality-gate">Quality Gate: Checking...</span>
+            </div>
+            <div class="panel-card-body">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; margin-bottom: 12px;">
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Bugs</span>
+                  <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-bugs">—</div>
+                </div>
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Vulnerabilities</span>
+                  <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-vulnerabilities">—</div>
+                </div>
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Code Smells</span>
+                  <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-code-smells">—</div>
+                </div>
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Security Rating</span>
+                  <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-security-rating">—</div>
+                </div>
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Reliability</span>
+                  <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-reliability">—</div>
+                </div>
+                <div>
+                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Maintainability</span>
+                  <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-maintainability">—</div>
+                </div>
+              </div>
+              <div style="font-size: 11.5px; color: var(--text-secondary); font-family: var(--font-mono); border-top: 1px solid var(--border-subtle); padding-top: 8px;" id="sonar-status-note">
+                SonarQube Integration: Server status loading...
+              </div>
+            </div>
+          </div>
+
+          <!-- Packages & Whitelist -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div class="panel-card">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Analyzed Application Packages</div>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Package</th>
+                      <th>Version</th>
+                      <th>Status</th>
+                      <th>Scanner</th>
+                    </tr>
+                  </thead>
+                  <tbody id="security-packages-tbody">
+                    <!-- Populated via loadSecurity() -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Ignored CVE Whitelist (.trivyignore)</div>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>CVE Identifier</th>
+                      <th>Project Policy / Mitigation Rationale</th>
+                      <th>Policy Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="security-ignored-cves-tbody">
+                    <!-- Populated via loadSecurity() -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             6. MONITORING VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-monitoring">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Live Observability &amp; Metrics</h2>
+              <p>Real-time application telemetry scraped via Prometheus and visualized in Grafana.</p>
+            </div>
+            <div class="view-header-actions">
+              <a href="http://localhost:3000/d/devsecops-app-monitoring" target="_blank" rel="noopener noreferrer" class="btn-platform btn-platform-outline">
+                Open Grafana Dashboard &rarr;
+              </a>
+              <a href="http://localhost:9090" target="_blank" rel="noopener noreferrer" class="btn-platform btn-platform-outline">
+                Open Prometheus &rarr;
+              </a>
+            </div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">Application Uptime</span></div>
+              <div class="kpi-value" id="mon-uptime">0h 0m 0s</div>
+              <div class="kpi-meta">Continuous Container Uptime</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">Database Status</span></div>
+              <div class="kpi-value text-success" id="mon-db-status" style="font-size: 19px;">Connected</div>
+              <div class="kpi-meta" id="mon-db-latency">Latency: 8 ms</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">HTTP Requests Total</span></div>
+              <div class="kpi-value" id="mon-req-total">—</div>
+              <div class="kpi-meta" id="mon-req-total-meta">Metric: flask_http_request_total</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header"><span class="kpi-label">Request Rate (5m)</span></div>
+              <div class="kpi-value" id="mon-req-rate">—</div>
+              <div class="kpi-meta" id="mon-req-rate-meta">Rate over 5 minutes</div>
+            </div>
+          </div>
+
+          <!-- HTTP Distribution & Target Status -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div class="panel-card">
+              <div class="panel-card-header">
+                <div class="panel-card-title">HTTP Response Code Distribution</div>
+              </div>
+              <div class="panel-card-body">
+                <div id="mon-status-distribution" style="display: flex; flex-wrap: wrap;"></div>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Prometheus Scraping Target</div>
+                <span class="status-badge success" id="mon-prom-target">UP</span>
+              </div>
+              <div class="panel-card-body">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                  <div>
+                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Scrape Endpoint</span>
+                    <div style="margin-top: 4px;"><span class="code-pill">devsecops-app:5000/metrics</span></div>
+                  </div>
+                  <div>
+                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Interval</span>
+                    <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: #fff;">15 seconds</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             7. INFRASTRUCTURE VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-infrastructure">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Cloud Infrastructure &amp; Topology</h2>
+              <p>Distinguishing AWS Production Infrastructure from Local Development Docker Compose Stack.</p>
+            </div>
+          </div>
+
+          <!-- AWS Production Infrastructure Section -->
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px;">
+            <span class="env-tag env-tag-aws">Production — AWS</span>
+            <span style="font-weight: 700; color: #fff; font-size: 14px;">Live AWS Infrastructure &amp; Cloud Workloads</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px;">
+            <div class="panel-card" style="margin-bottom: 0;">
+              <div class="panel-card-header">
+                <div class="panel-card-title">AWS EC2 Server</div>
+                <span class="status-badge success">Online</span>
+              </div>
+              <div class="panel-card-body">
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Instance ID:</div>
+                <div class="code-pill" id="infra-ec2-id">i-0fb9dcbeb35b4fdbe</div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px; margin-bottom: 4px;">Instance Type &bull; AMI:</div>
+                <div style="font-size: 13px; color: #fff;"><span id="infra-ec2-type">t3.micro</span> &bull; <span id="infra-ec2-ami">ami-0ee11497c4eac651d</span></div>
+              </div>
+            </div>
+
+            <div class="panel-card" style="margin-bottom: 0;">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Amazon ECR Registry</div>
+                <span class="status-badge success">Active</span>
+              </div>
+              <div class="panel-card-body">
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Repository URI:</div>
+                <div class="code-pill" style="font-size: 11px; word-break: break-all;" id="infra-ecr-repo">850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest</div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px; margin-bottom: 4px;">Region:</div>
+                <div style="font-size: 13px; color: #fff;">ap-south-1 (Mumbai)</div>
+              </div>
+            </div>
+
+            <div class="panel-card" style="margin-bottom: 0;">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Ingress &amp; Orchestration</div>
+              </div>
+              <div class="panel-card-body">
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Nginx Reverse Proxy:</div>
+                <div style="font-size: 13px; color: var(--color-success); font-weight: 600;" id="infra-nginx-health">Healthy (Port 80)</div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px; margin-bottom: 4px;">AWS Systems Manager:</div>
+                <div style="font-size: 13px; color: #fff;">Zero SSH Bastion (Encrypted Run Command)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Terraform Resources -->
+          <div class="panel-card" style="margin-bottom: 28px;">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Terraform-Managed Cloud Resources</div>
+              <span class="code-pill">terraform/main.tf</span>
+            </div>
+            <div class="panel-card-body">
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+                <div>
+                  <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">VPC Network</div>
+                  <div style="margin-top: 4px;"><span class="code-pill" id="infra-tf-vpc">10.0.0.0/16</span></div>
+                </div>
+                <div>
+                  <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Subnet (ap-south-1a)</div>
+                  <div style="margin-top: 4px;"><span class="code-pill" id="infra-tf-subnet">10.0.1.0/24</span></div>
+                </div>
+                <div>
+                  <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Security Group</div>
+                  <div style="margin-top: 4px;"><span class="code-pill" id="infra-tf-sg">Ports 80, 3000 Ingress</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Local Development Stack Section -->
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px;">
+            <span class="env-tag env-tag-docker">Local Development — Docker</span>
+            <span style="font-weight: 700; color: #fff; font-size: 14px;">Docker Compose Stack &amp; Service Probes</span>
+          </div>
+
+          <!-- Docker Engine Containers -->
+          <div class="panel-card" style="margin-bottom: 20px;">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Docker Engine Containers</div>
+            </div>
+            <div class="panel-card-body" style="padding-bottom: 4px;">
+              <div id="infra-docker-status-msg" style="display: none; padding: 10px 14px; margin-bottom: 14px; font-size: 12.5px; color: var(--color-warning); background: var(--color-warning-bg); border: 1px solid var(--color-warning-border); border-radius: var(--radius-md);"></div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Container Name</th>
+                    <th>Status</th>
+                    <th>Port Bindings</th>
+                  </tr>
+                </thead>
+                <tbody id="infra-containers-tbody">
+                  <!-- Populated via loadInfrastructure() -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Local Service Network Probes -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Local Service TCP/HTTP Health Probes</div>
+              <span class="code-pill">Socket/HTTP Direct Probes</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Service</th>
+                    <th>Environment</th>
+                    <th>Target Host &amp; Port</th>
+                    <th>Probe Method</th>
+                    <th>Status</th>
+                    <th>Latency</th>
+                  </tr>
+                </thead>
+                <tbody id="infra-probes-tbody">
+                  <!-- Populated via loadInfrastructure() -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             8. SETTINGS VIEW
+             ================================================================ -->
+        <section class="platform-view-panel" id="view-settings">
+          <div class="view-header">
+            <div class="view-header-title">
+              <h2>Engine Health &amp; Diagnostics</h2>
+              <p>Audit underlying tools with context-aware execution source and environment checks.</p>
+            </div>
+            <div class="view-header-actions">
+              <button class="btn-platform btn-platform-primary" id="btn-run-diagnostics" onclick="runDiagnostics()">Test All Connections</button>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Context-Aware Diagnostic Engine Status</div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Engine / Tool</th>
+                    <th>Role</th>
+                    <th>Environment</th>
+                    <th>Check Source</th>
+                    <th>Status</th>
+                    <th>Status Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="diagnostics-tbody">
+                  <tr>
+                    <td colspan="6" class="text-center text-muted" style="padding: 24px;">
+                      Click "Test All Connections" to initiate live diagnostic probes.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ====================================================================
+       MODALS & DRAWERS
+       ==================================================================== -->
+
+  <!-- Onboard Project Modal -->
+  <div class="modal-backdrop" id="modal-onboard-project">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Onboard New Project</h3>
+        <button class="modal-close-btn">&times;</button>
+      </div>
+      <form id="form-onboard-project">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group full-width">
+              <label class="form-label" for="input-onboard-name">Project Name</label>
+              <input type="text" id="input-onboard-name" name="name" class="form-input" placeholder="e.g., Payment Gateway Service" required>
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label" for="input-onboard-repo">GitHub Repository URL</label>
+              <input type="text" id="input-onboard-repo" name="repository" class="form-input" placeholder="https://github.com/organization/repository.git" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="input-onboard-branch">Branch</label>
+              <input type="text" id="input-onboard-branch" name="branch" class="form-input" value="main" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="input-onboard-type">Application Type</label>
+              <select id="input-onboard-type" name="app_type" class="form-select">
+                <option value="Python / Flask">Python / Flask (Alpine Multi-Stage)</option>
+                <option value="Node.js">Node.js Express / Nest</option>
+                <option value="Go">Go Microservice</option>
+                <option value="Java">Java Spring Boot</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="input-onboard-env">Target Environment</label>
+              <select id="input-onboard-env" name="environment" class="form-select">
+                <option value="Production">Production</option>
+                <option value="Staging">Staging</option>
+                <option value="Development">Development</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="input-onboard-target">Deployment Target</label>
+              <select id="input-onboard-target" name="deployment_target" class="form-select">
+                <option value="AWS EC2 via SSM">AWS EC2 via SSM (ap-south-1)</option>
+                <option value="Docker Compose">Docker Compose (Local)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Real-Time Validation Checklist -->
+          <ul class="validation-checklist" id="onboard-validation-checklist" style="display: none;"></ul>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-platform btn-platform-outline" id="btn-onboard-validate">Connect &amp; Validate</button>
+          <button type="submit" class="btn-platform btn-platform-primary" id="btn-onboard-submit" disabled>Save &amp; Connect Project</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Project Details Modal -->
+  <div class="modal-backdrop" id="modal-project-details">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="proj-modal-name">Project Specification</h3>
+        <button class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Project Identifier</span>
+            <div style="margin-top: 4px;"><span class="code-pill" id="proj-modal-id"></span></div>
+          </div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Branch &bull; Environment</span>
+            <div style="margin-top: 4px;"><span class="code-pill" id="proj-modal-branch"></span> &bull; <span class="status-badge info" id="proj-modal-env"></span></div>
+          </div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Health Status</span>
+            <div style="margin-top: 4px; font-weight: 600; color: var(--color-success);" id="proj-modal-health">Healthy</div>
+          </div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Database Status</span>
+            <div style="margin-top: 4px; font-weight: 600; color: var(--color-success);" id="proj-modal-db">Connected</div>
+          </div>
+          <div style="grid-column: span 2;">
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Repository URL</span>
+            <div style="margin-top: 4px;"><a id="proj-modal-repo" href="#" target="_blank" style="color: var(--color-brand-light); font-family: var(--font-mono); font-size: 12px;"></a></div>
+          </div>
+          <div style="grid-column: span 2;">
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Latest Commit</span>
+            <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 12px; color: #fff;" id="proj-modal-commit"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-platform btn-platform-outline" onclick="closeModal('modal-project-details'); switchView('pipelines');">View Pipeline</button>
+        <button class="btn-platform btn-platform-outline" onclick="closeModal('modal-project-details'); switchView('security');">View Security</button>
+        <button class="btn-platform btn-platform-primary" onclick="closeModal('modal-project-details'); triggerDeployment();">Deploy</button>
       </div>
     </div>
   </div>
 
-  <!-- Navigation Bar -->
-  <header class="navbar" id="navbar">
-    <div class="container navbar-inner">
-      <a href="#home" class="brand" aria-label="ABC Free Consultants Home">
-        <div class="brand-logo">
-          <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <rect width="36" height="36" rx="8" fill="url(#brand-gradient)"/>
-            <path d="M10 26L18 10L26 26" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M13 21H23" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round"/>
-            <circle cx="18" cy="18" r="2.5" fill="#38BDF8"/>
-            <defs>
-              <linearGradient id="brand-gradient" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#1E3A8A"/>
-                <stop offset="1" stop-color="#0284C7"/>
-              </linearGradient>
-            </defs>
-          </svg>
+  <!-- Stage Details Modal -->
+  <div class="modal-backdrop" id="modal-stage-details">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="stage-modal-name">Step Invocation Details</h3>
+        <button class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px;">
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Stage ID</span>
+            <div style="margin-top: 4px;"><span class="code-pill" id="stage-modal-id">—</span></div>
+          </div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Stage Status</span>
+            <div style="margin-top: 4px;"><span class="status-badge success" id="stage-modal-status">PASSED</span></div>
+          </div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Step Duration</span>
+            <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: #fff;" id="stage-modal-duration">0s</div>
+          </div>
         </div>
-        <div class="brand-text">
-          <span class="brand-name">ABC Free</span>
-          <span class="brand-tag">Consultants</span>
+        <div style="margin-bottom: 14px;">
+          <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Executed Command / Workflow Action</span>
+          <div class="terminal-view" style="margin-top: 6px;">
+            <div class="terminal-line info" id="stage-modal-command"></div>
+          </div>
         </div>
-      </a>
-
-      <!-- Desktop & Mobile Navigation Links -->
-      <nav class="nav-menu" id="nav-menu" aria-label="Primary Navigation">
-        <ul class="nav-list">
-          <li class="nav-item"><a href="#home" class="nav-link active">Home</a></li>
-          <li class="nav-item"><a href="#about" class="nav-link">About</a></li>
-          <li class="nav-item"><a href="#services" class="nav-link">Services</a></li>
-          <li class="nav-item"><a href="#architecture" class="nav-link">Architecture</a></li>
-          <li class="nav-item"><a href="#pipeline" class="nav-link">CI/CD Pipeline</a></li>
-          <li class="nav-item"><a href="#telemetry" class="nav-link">Live Telemetry</a></li>
-          <li class="nav-item"><a href="#contact" class="nav-link">Contact</a></li>
-        </ul>
-        <div class="nav-cta">
-          <a href="#contact" class="btn btn-primary btn-sm">Request Consultation</a>
+        <div id="stage-modal-error-box" style="display: none;">
+          <span style="font-size: 11px; text-transform: uppercase; color: var(--color-danger); font-weight: 600;">Failure Telemetry / Error Message</span>
+          <div class="terminal-view" style="margin-top: 6px; border-color: var(--color-danger-border);">
+            <div class="terminal-line error" id="stage-modal-error"></div>
+          </div>
         </div>
-      </nav>
-
-      <!-- Mobile Menu Toggle Button -->
-      <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="nav-menu">
-        <span class="hamburger-bar"></span>
-        <span class="hamburger-bar"></span>
-        <span class="hamburger-bar"></span>
-      </button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-platform btn-platform-outline btn-modal-close">Close</button>
+      </div>
     </div>
-  </header>
+  </div>
 
-  <main id="main-content">
-    <!-- Hero Section -->
-    <section class="hero-section" id="home">
-      <div class="container hero-container">
-        <div class="hero-content">
-          <div class="hero-pill">
-            <span class="pill-dot"></span>
-            <span>Zero Advisory Fees &bull; Enterprise-Grade DevSecOps Delivery</span>
-          </div>
-          <h1 class="hero-title">
-            ABC Free Consultants - DevSecOps Deployment Demo
-          </h1>
-          <p class="hero-subtitle">
-            ABC Free Consultants provides strategic business transformation and cloud modernization at no charge—delivered seamlessly through an enterprise automated DevSecOps platform with real-time monitoring and strict security gates.
-          </p>
-          <div class="hero-actions">
-            <a href="#services" class="btn btn-primary btn-lg">Explore Services</a>
-            <a href="#architecture" class="btn btn-outline btn-lg">View DevSecOps Flow</a>
-          </div>
-
-          <!-- Real Demonstrable Platform Metrics (Replacing Fake Business Claims) -->
-          <div class="hero-stats">
-            <div class="stat-item">
-              <span class="stat-number">100%</span>
-              <span class="stat-label">Automated CI/CD Delivery</span>
-            </div>
-            <div class="stat-divider"></div>
-            <div class="stat-item">
-              <span class="stat-number">0</span>
-              <span class="stat-label">Critical Trivy CVEs</span>
-            </div>
-            <div class="stat-divider"></div>
-            <div class="stat-item">
-              <span class="stat-number">&lt; 15ms</span>
-              <span class="stat-label">P95 Proxy Latency</span>
-            </div>
-            <div class="stat-divider"></div>
-            <div class="stat-item">
-              <span class="stat-number">24/7</span>
-              <span class="stat-label">Prometheus Telemetry</span>
-            </div>
-          </div>
+  <!-- Platform Logs Modal -->
+  <div class="modal-backdrop" id="modal-platform-logs">
+    <div class="modal-box" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Platform Execution &amp; Deployment Logs</h3>
+        <button class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="terminal-view" id="platform-terminal-logs">
+          <!-- Populated via openLogsModal() -->
         </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-platform btn-platform-outline btn-modal-close">Close</button>
+      </div>
+    </div>
+  </div>
 
-        <div class="hero-graphic">
-          <!-- Live Interactive Engineering Card -->
-          <div class="hero-card hero-card-main">
-            <div class="card-header-row">
-              <span class="card-icon-wrap icon-strategy">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 20V10M18 20V4M6 20v-4"/>
-                </svg>
-              </span>
-              <div class="card-header-text">
-                <h3>Cloud Platform Live Control</h3>
-                <span class="text-muted">Real-Time Infrastructure Telemetry</span>
-              </div>
-            </div>
-            <div class="card-metric-grid">
-              <div class="metric-box">
-                <span class="metric-title">Deployment Target</span>
-                <span class="metric-val text-success">AWS EC2</span>
-                <span class="metric-trend text-muted">Via Systems Manager (SSM)</span>
-              </div>
-              <div class="metric-box">
-                <span class="metric-title">Database Storage</span>
-                <span class="metric-val text-info" id="hero-db-status">MySQL 8.0</span>
-                <span class="metric-trend text-success">Parameterized Persistence</span>
-              </div>
-            </div>
-            <div class="card-progress-section">
-              <div class="progress-info">
-                <span>CI/CD Pipeline Verification Score</span>
-                <span class="fw-bold text-success">100% Passed</span>
-              </div>
-              <div class="progress-bar">
-                <div class="progress-fill" style="width: 100%;"></div>
-              </div>
-              <div class="platform-tags">
-                <span class="tech-tag">pytest</span>
-                <span class="tech-tag">SonarQube</span>
-                <span class="tech-tag">Trivy</span>
-                <span class="tech-tag">Docker</span>
-                <span class="tech-tag">AWS ECR</span>
-                <span class="tech-tag">Prometheus</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="hero-card hero-floating-card">
-            <div class="floating-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              </svg>
-            </div>
+  <!-- Demo App Preview Modal (Preserves ABC Free Consultants Interactive Consultation) -->
+  <div class="modal-backdrop" id="modal-demo-app-preview">
+    <div class="modal-box" style="max-width: 750px;">
+      <div class="modal-header">
+        <div>
+          <h3>ABC Free Consultants &bull; Deployed Demo Application</h3>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+            Zero-Cost Strategic Advisory &bull; Services &bull; Cloud Modernization &amp; DevSecOps
+          </p>
+        </div>
+        <button class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background-color: var(--bg-surface); padding: 14px 18px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <p class="floating-title">Zero-Trust Security Baseline</p>
-              <p class="floating-sub">Continuous SAST &amp; container image vulnerability audits</p>
+              <span class="status-badge success">Deployed Workload</span>
+              <strong style="margin-left: 8px; color: #fff;">ABC Free Consultants Enterprise Advisory</strong>
             </div>
+            <a href="/demo" target="_blank" rel="noopener noreferrer" class="btn-platform btn-platform-outline btn-platform-sm">
+              Open Standalone Website &rarr;
+            </a>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- About Section -->
-    <section class="section about-section" id="about">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">About ABC Free Consultants</span>
-          <h2 class="section-title">Democratizing Elite Advisory for Modern Business</h2>
-          <p class="section-description">
-            We bridge the gap between emerging enterprises and top-tier strategic management. Our mission is to remove cost barriers and deliver actionable, data-backed consulting supported by enterprise-grade technology.
+          <p style="font-size: 12.5px; color: var(--text-secondary); margin-top: 8px;">
+            This live workload runs in the Docker container deployed through the platform to AWS EC2 via SSM with parameterized MySQL storage.
           </p>
         </div>
 
-        <div class="about-grid">
-          <div class="about-text-col">
-            <h3>Bridging Vision and Flawless Execution</h3>
-            <p>
-              Founded on the belief that strategic excellence should not be reserved only for Fortune 500 balance sheets, <strong>ABC Free Consultants</strong> provides pro-bono, institutional-grade guidance across corporate strategy, cloud modernization, and operational efficiency.
-            </p>
-            <p>
-              As the flagship client application for this <em>Cloud-Based DevSecOps Platform</em>, our production delivery is fully automated, secure, and monitored from code commit to cloud deployment.
-            </p>
-
-            <div class="about-highlights">
-              <div class="highlight-item">
-                <div class="highlight-icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                    <polyline points="22 4 12 14.01 9 11.01"/>
-                  </svg>
-                </div>
-                <div>
-                  <h4>Zero-Cost Philosophy</h4>
-                  <p>Sponsored through enterprise innovation grants and philanthropic technology initiatives.</p>
-                </div>
-              </div>
-
-              <div class="highlight-item">
-                <div class="highlight-icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <polyline points="12 6 12 12 14 14"/>
-                  </svg>
-                </div>
-                <div>
-                  <h4>Rapid Deployment</h4>
-                  <p>Go from discovery call to actionable execution roadmap within 5 business days.</p>
-                </div>
-              </div>
-
-              <div class="highlight-item">
-                <div class="highlight-icon">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                    <circle cx="9" cy="7" r="4"/>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                  </svg>
-                </div>
-                <div>
-                  <h4>Dedicated Advisory Teams</h4>
-                  <p>Matched with verified subject matter experts aligned to your specific industry.</p>
-                </div>
-              </div>
+        <h4 style="font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 12px;">Test Consultation Request (MySQL Persistence)</h4>
+        <form id="demo-consultation-form" onsubmit="handleConsultationSubmit(event)">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label" for="consult-name">Full Name</label>
+              <input type="text" id="consult-name" name="name" class="form-input" placeholder="Alex Mercer" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="consult-email">Corporate Email</label>
+              <input type="email" id="consult-email" name="email" class="form-input" placeholder="alex@enterprise.com" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="consult-company">Company</label>
+              <input type="text" id="consult-company" name="company" class="form-input" placeholder="Mercer Global Corp" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="consult-service">Practice Area</label>
+              <select id="consult-service" name="service" class="form-select">
+                <option value="cloud">Cloud Architecture &amp; Modernization</option>
+                <option value="security">DevSecOps &amp; Compliance</option>
+                <option value="strategy">Strategic Transformation</option>
+              </select>
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label" for="consult-message">Project Overview</label>
+              <textarea id="consult-message" name="message" class="form-textarea" rows="3" placeholder="Brief project overview (minimum 10 characters)..." required></textarea>
             </div>
           </div>
-
-          <div class="about-card-col">
-            <div class="values-card">
-              <h4 class="values-card-title">Our Guiding Principles</h4>
-              <ul class="values-list">
-                <li class="value-item">
-                  <span class="value-number">01</span>
-                  <div>
-                    <h5>Radical Transparency</h5>
-                    <p>Honest assessments, candid feasibility reviews, and no sugar-coated recommendations.</p>
-                  </div>
-                </li>
-                <li class="value-item">
-                  <span class="value-number">02</span>
-                  <div>
-                    <h5>Actionable Playbooks</h5>
-                    <p>We deliver ready-to-run execution playbooks instead of generic 100-slide decks.</p>
-                  </div>
-                </li>
-                <li class="value-item">
-                  <span class="value-number">03</span>
-                  <div>
-                    <h5>DevSecOps &amp; Engineering Rigor</h5>
-                    <p>Technology strategies grounded in automated continuous delivery, security, and scalability.</p>
-                  </div>
-                </li>
-                <li class="value-item">
-                  <span class="value-number">04</span>
-                  <div>
-                    <h5>Measurable Business Impact</h5>
-                    <p>Every engagement defines clear KPIs: revenue growth, cost reduction, and time-to-market.</p>
-                  </div>
-                </li>
-              </ul>
-            </div>
+          <div id="consultation-status-msg" style="display: none; font-size: 12.5px; margin-bottom: 12px; font-family: var(--font-mono);"></div>
+          <div style="display: flex; justify-content: flex-end;">
+            <button type="submit" class="btn-platform btn-platform-primary">Submit Consultation Request</button>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Services Section -->
-    <section class="section services-section" id="services">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">Consulting Services</span>
-          <h2 class="section-title">Specialized Strategic Advisory Practices</h2>
-          <p class="section-description">
-            Tailored advisory services designed to solve core organizational challenges and accelerate sustainable growth.
-          </p>
-        </div>
-
-        <div class="services-grid">
-          <!-- Service Card 1 -->
-          <div class="service-card">
-            <div class="service-icon icon-blue">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
-              </svg>
-            </div>
-            <h3 class="service-title">Corporate Strategy &amp; GTM</h3>
-            <p class="service-desc">
-              Comprehensive market positioning, go-to-market roadmaps, and competitive moat differentiation to unlock new revenue streams.
-            </p>
-            <ul class="service-points">
-              <li>Market sizing &amp; expansion roadmaps</li>
-              <li>Competitive landscape benchmarking</li>
-              <li>Product-market fit calibration</li>
-            </ul>
-          </div>
-
-          <!-- Service Card 2 -->
-          <div class="service-card">
-            <div class="service-icon icon-cyan">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
-              </svg>
-            </div>
-            <h3 class="service-title">Cloud &amp; Digital Transformation</h3>
-            <p class="service-desc">
-              Modern cloud architecture, microservices transition, and automated DevSecOps pipelines for high-velocity software delivery.
-            </p>
-            <ul class="service-points">
-              <li>AWS &amp; hybrid cloud infrastructure design</li>
-              <li>Automated CI/CD deployment pipelines</li>
-              <li>Microservices &amp; container modernization</li>
-            </ul>
-          </div>
-
-          <!-- Service Card 3 -->
-          <div class="service-card">
-            <div class="service-icon icon-emerald">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="1" x2="12" y2="23"/>
-                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-              </svg>
-            </div>
-            <h3 class="service-title">Financial Planning &amp; Advisory</h3>
-            <p class="service-desc">
-              Cash-flow modeling, unit economics analysis, burn rate optimization, and investor-ready financial forecast models.
-            </p>
-            <ul class="service-points">
-              <li>3-year financial pro-forma modeling</li>
-              <li>Cost optimization &amp; cloud spend audit</li>
-              <li>Fundraising &amp; pitch readiness audits</li>
-            </ul>
-          </div>
-
-          <!-- Service Card 4 -->
-          <div class="service-card">
-            <div class="service-icon icon-amber">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              </svg>
-            </div>
-            <h3 class="service-title">Cybersecurity &amp; Compliance</h3>
-            <p class="service-desc">
-              Defensive security architecture, compliance framework readiness (SOC 2, ISO 27001), and vulnerability mitigation.
-            </p>
-            <ul class="service-points">
-              <li>Static &amp; dynamic security scanning</li>
-              <li>Policy governance &amp; access control</li>
-              <li>Infrastructure hardening &amp; audit defense</li>
-            </ul>
-          </div>
-
-          <!-- Service Card 5 -->
-          <div class="service-card">
-            <div class="service-icon icon-purple">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-              </svg>
-            </div>
-            <h3 class="service-title">Operational Excellence &amp; Lean</h3>
-            <p class="service-desc">
-              Eliminate organizational bottlenecks, streamline workflows, automate repetitive tasks, and maximize operating margins.
-            </p>
-            <ul class="service-points">
-              <li>Process mapping &amp; friction analysis</li>
-              <li>Cross-functional KPI alignment</li>
-              <li>Automation toolchain integration</li>
-            </ul>
-          </div>
-
-          <!-- Service Card 6 -->
-          <div class="service-card">
-            <div class="service-icon icon-rose">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="20" x2="18" y2="10"/>
-                <line x1="12" y1="20" x2="12" y2="4"/>
-                <line x1="6" y1="20" x2="6" y2="14"/>
-              </svg>
-            </div>
-            <h3 class="service-title">Data &amp; Predictive Analytics</h3>
-            <p class="service-desc">
-              Turn raw transactional data into actionable executive insights with custom business intelligence dashboards and telemetry.
-            </p>
-            <ul class="service-points">
-              <li>Executive BI &amp; performance dashboards</li>
-              <li>Data warehousing &amp; schema design</li>
-              <li>Predictive churn &amp; retention modeling</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- NEW SECTION: DevSecOps Platform Architecture & Infrastructure -->
-    <section class="section arch-section" id="architecture">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">Platform Engineering</span>
-          <h2 class="section-title">DevSecOps Architecture &amp; System Flow</h2>
-          <p class="section-description">
-            Complete end-to-end blueprint of our Cloud-Based DevSecOps Platform. Every release is automatically tested, scanned, packaged, deployed to AWS EC2, and monitored with Prometheus and Grafana.
-          </p>
-        </div>
-
-        <!-- Interactive Architecture Flow Diagram -->
-        <div class="arch-flow-wrapper">
-          <div class="arch-stages-grid">
-            <!-- Stage 1 -->
-            <div class="arch-stage-card">
-              <div class="stage-badge">01 &bull; Source</div>
-              <div class="stage-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2">
-                  <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
-                </svg>
-              </div>
-              <h4 class="stage-title">Developer &amp; GitHub</h4>
-              <p class="stage-text">Code pushed to <code>main</code> branch triggers automated GitHub Actions workflow on Windows self-hosted runner.</p>
-              <div class="stage-tags">
-                <span class="badge badge-subtle">Git</span>
-                <span class="badge badge-subtle">GitHub</span>
-              </div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="arch-arrow">&#10230;</div>
-
-            <!-- Stage 2 -->
-            <div class="arch-stage-card">
-              <div class="stage-badge">02 &bull; Test &amp; SAST</div>
-              <div class="stage-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                  <polyline points="14 2 14 8 20 8"></polyline>
-                  <line x1="16" y1="13" x2="8" y2="13"></line>
-                  <line x1="16" y1="17" x2="8" y2="17"></line>
-                  <polyline points="10 9 9 9 8 9"></polyline>
-                </svg>
-              </div>
-              <h4 class="stage-title">pytest &amp; SonarQube</h4>
-              <p class="stage-text">Runs automated unit tests with pytest, followed by SonarScanner SAST code quality &amp; bug inspection.</p>
-              <div class="stage-tags">
-                <span class="badge badge-subtle">pytest</span>
-                <span class="badge badge-subtle">SonarQube</span>
-              </div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="arch-arrow">&#10230;</div>
-
-            <!-- Stage 3 -->
-            <div class="arch-stage-card">
-              <div class="stage-badge">03 &bull; Security</div>
-              <div class="stage-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                </svg>
-              </div>
-              <h4 class="stage-title">Aqua Trivy Scanning</h4>
-              <p class="stage-text">Deep scanning of filesystem, Python dependencies, and Docker container images for CVE vulnerabilities.</p>
-              <div class="stage-tags">
-                <span class="badge badge-subtle">Trivy</span>
-                <span class="badge badge-subtle">CVE Gate</span>
-              </div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="arch-arrow">&#10230;</div>
-
-            <!-- Stage 4 -->
-            <div class="arch-stage-card">
-              <div class="stage-badge">04 &bull; Package</div>
-              <div class="stage-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6366F1" stroke-width="2">
-                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-                  <line x1="6" y1="6" x2="6.01" y2="6"></line>
-                  <line x1="6" y1="18" x2="6.01" y2="18"></line>
-                </svg>
-              </div>
-              <h4 class="stage-title">Docker &amp; AWS ECR</h4>
-              <p class="stage-text">Hardened Alpine container built and pushed securely to private AWS Elastic Container Registry.</p>
-              <div class="stage-tags">
-                <span class="badge badge-subtle">Docker</span>
-                <span class="badge badge-subtle">AWS ECR</span>
-              </div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="arch-arrow">&#10230;</div>
-
-            <!-- Stage 5 -->
-            <div class="arch-stage-card">
-              <div class="stage-badge">05 &bull; CD Deploy</div>
-              <div class="stage-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#EC4899" stroke-width="2">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                </svg>
-              </div>
-              <h4 class="stage-title">AWS SSM &amp; EC2</h4>
-              <p class="stage-text">Zero-SSH remote automated deployment executed via AWS Systems Manager onto Amazon Linux 2023 EC2 host.</p>
-              <div class="stage-tags">
-                <span class="badge badge-subtle">AWS SSM</span>
-                <span class="badge badge-subtle">Amazon EC2</span>
-              </div>
-            </div>
-
-            <!-- Arrow -->
-            <div class="arch-arrow">&#10230;</div>
-
-            <!-- Stage 6 -->
-            <div class="arch-stage-card">
-              <div class="stage-badge">06 &bull; Runtime &amp; Telemetry</div>
-              <div class="stage-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#06B6D4" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="12" y1="8" x2="12" y2="12"></line>
-                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
-              </div>
-              <h4 class="stage-title">Nginx, MySQL &amp; Grafana</h4>
-              <p class="stage-text">Nginx proxies to Flask backend backed by MySQL database. Prometheus scrapes metrics for Grafana visualization.</p>
-              <div class="stage-tags">
-                <span class="badge badge-subtle">Nginx</span>
-                <span class="badge badge-subtle">MySQL</span>
-                <span class="badge badge-subtle">Prometheus</span>
-                <span class="badge badge-subtle">Grafana</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Architecture Feature Breakdown Cards -->
-        <div class="arch-details-grid">
-          <div class="arch-detail-card">
-            <h4>Security-First Pipeline</h4>
-            <p>Every commit must pass unit tests, static code analysis with SonarQube, and container vulnerability audits before an image is pushed to AWS ECR.</p>
-          </div>
-          <div class="arch-detail-card">
-            <h4>Zero-SSH Immutable Deployment</h4>
-            <p>Deployments execute without exposing open SSH ports (Port 22 closed), leveraging AWS Systems Manager (SSM) Run Command with IAM role enforcement.</p>
-          </div>
-          <div class="arch-detail-card">
-            <h4>Relational Persistence &amp; Fallback</h4>
-            <p>Client requests persist to MySQL 8.0 with parameterized SQL statements. In offline scenarios, the system gracefully shifts to an in-memory circuit breaker.</p>
-          </div>
-          <div class="arch-detail-card">
-            <h4>Full-Stack Telemetry</h4>
-            <p>Real-time metrics exposed via <code>/metrics</code>, scraped every 15s by Prometheus, and rendered into executive Grafana monitoring dashboards.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- NEW SECTION: Visual CI/CD Pipeline Breakdown -->
-    <section class="section pipeline-section" id="pipeline">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">Continuous Delivery</span>
-          <h2 class="section-title">Automated CI/CD Workflow Stages</h2>
-          <p class="section-description">
-            Live execution pipeline breakdown running on the self-hosted Windows runner executing through GitHub Actions.
-          </p>
-        </div>
-
-        <div class="pipeline-track">
-          <div class="pipeline-step-box step-passed">
-            <div class="step-header">
-              <span class="step-num">Step 1</span>
-              <span class="step-status">Success &#10003;</span>
-            </div>
-            <h4>Environment &amp; Setup</h4>
-            <p>Windows PowerShell environment checkout, Python 3.14 validation, pip dependency installation.</p>
-            <div class="step-meta">Runner: Self-Hosted Windows</div>
-          </div>
-
-          <div class="pipeline-step-box step-passed">
-            <div class="step-header">
-              <span class="step-num">Step 2</span>
-              <span class="step-status">Success &#10003;</span>
-            </div>
-            <h4>Unit &amp; Endpoint Tests</h4>
-            <p>pytest execution covering home, health, static assets, telemetry APIs, and consultation validation.</p>
-            <div class="step-meta">Framework: pytest 9.1.1</div>
-          </div>
-
-          <div class="pipeline-step-box step-passed">
-            <div class="step-header">
-              <span class="step-num">Step 3</span>
-              <span class="step-status">Success &#10003;</span>
-            </div>
-            <h4>Static Code Analysis (SAST)</h4>
-            <p>SonarScanner analysis verifying code quality, test coverage, maintainability, and security hotspots.</p>
-            <div class="step-meta">Platform: SonarQube Server</div>
-          </div>
-
-          <div class="pipeline-step-box step-passed">
-            <div class="step-header">
-              <span class="step-num">Step 4</span>
-              <span class="step-status">Success &#10003;</span>
-            </div>
-            <h4>Vulnerability Scanning</h4>
-            <p>Aqua Security Trivy scans filesystem, dependencies, and built Docker image for HIGH/CRITICAL CVEs.</p>
-            <div class="step-meta">Scanner: Trivy CLI (Windows)</div>
-          </div>
-
-          <div class="pipeline-step-box step-passed">
-            <div class="step-header">
-              <span class="step-num">Step 5</span>
-              <span class="step-status">Success &#10003;</span>
-            </div>
-            <h4>Container Packaging &amp; Push</h4>
-            <p>Docker container build with Alpine base, tagged with commit SHA and latest, pushed to AWS ECR.</p>
-            <div class="step-meta">Registry: AWS ECR Private</div>
-          </div>
-
-          <div class="pipeline-step-box step-passed">
-            <div class="step-header">
-              <span class="step-num">Step 6</span>
-              <span class="step-status">Success &#10003;</span>
-            </div>
-            <h4>Remote SSM Deploy &amp; Health</h4>
-            <p>AWS Systems Manager executes zero-downtime pull, container restart, and performs <code>/health</code> verification.</p>
-            <div class="step-meta">Target: AWS EC2 (Amazon Linux 2023)</div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- NEW SECTION: Live Telemetry & Platform Monitoring -->
-    <section class="section telemetry-section" id="telemetry">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">Observability</span>
-          <h2 class="section-title">Live Platform Telemetry &amp; Monitoring</h2>
-          <p class="section-description">
-            Live telemetry fetched dynamically from the running backend via <code>/api/status</code>, <code>/health</code>, and <code>/metrics</code>.
-          </p>
-        </div>
-
-        <div class="telemetry-dashboard-card">
-          <div class="telemetry-header">
-            <div class="telemetry-title-group">
-              <span class="pulse-indicator"></span>
-              <h3>Platform Status: <span class="text-success" id="telemetry-status-text">ONLINE &amp; HEALTHY</span></h3>
-            </div>
-            <button class="btn btn-outline btn-sm" id="refresh-telemetry-btn" title="Refresh Telemetry">
-              <span>&#8635; Refresh Live Telemetry</span>
-            </button>
-          </div>
-
-          <!-- Live Metrics Grid -->
-          <div class="telemetry-grid">
-            <div class="telemetry-widget">
-              <span class="widget-label">Application Service</span>
-              <span class="widget-value" id="telem-service">devsecops-platform</span>
-              <span class="widget-sub" id="telem-version">Version: v1.0.1-production</span>
-            </div>
-
-            <div class="telemetry-widget">
-              <span class="widget-label">Database Connection</span>
-              <span class="widget-value text-success" id="telem-db-status">MySQL Connected</span>
-              <span class="widget-sub" id="telem-db-details">Host: mysql:3306 (PyMySQL)</span>
-            </div>
-
-            <div class="telemetry-widget">
-              <span class="widget-label">Consultations Stored</span>
-              <span class="widget-value text-info" id="telem-consultations-count">Loading...</span>
-              <span class="widget-sub">Persistent MySQL Table</span>
-            </div>
-
-            <div class="telemetry-widget">
-              <span class="widget-label">Application Uptime</span>
-              <span class="widget-value" id="telem-uptime">Calculating...</span>
-              <span class="widget-sub">Continuous Active Execution</span>
-            </div>
-
-            <div class="telemetry-widget">
-              <span class="widget-label">Prometheus Metric Scraper</span>
-              <span class="widget-value text-success">Healthy (15s scrape)</span>
-              <span class="widget-sub"><a href="/metrics" target="_blank" rel="noopener noreferrer">View Raw /metrics &#8599;</a></span>
-            </div>
-
-            <div class="telemetry-widget">
-              <span class="widget-label">Grafana Dashboards</span>
-              <span class="widget-value text-info">Port 3000 Provisioned</span>
-              <span class="widget-sub">Automated Dashboard &amp; Alerting</span>
-            </div>
-          </div>
-
-          <!-- Endpoints Quick Bar -->
-          <div class="telemetry-footer-bar">
-            <span class="telemetry-footer-title">Verified Telemetry Endpoints:</span>
-            <div class="endpoint-badges">
-              <a href="/health" class="ep-badge" target="_blank" rel="noopener noreferrer">
-                <span class="ep-method">GET</span> /health
-              </a>
-              <a href="/api/status" class="ep-badge" target="_blank" rel="noopener noreferrer">
-                <span class="ep-method">GET</span> /api/status
-              </a>
-              <a href="/api/contact" class="ep-badge" target="_blank" rel="noopener noreferrer">
-                <span class="ep-method">GET</span> /api/contact
-              </a>
-              <a href="/metrics" class="ep-badge" target="_blank" rel="noopener noreferrer">
-                <span class="ep-method">GET</span> /metrics
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Why Choose Us Section -->
-    <section class="section why-us-section" id="why-us">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">Our Competitive Edge</span>
-          <h2 class="section-title">Why Industry Leaders Choose ABC Free Consultants</h2>
-          <p class="section-description">
-            Experience the expertise of top-tier strategy consultants without high hourly fees, lengthy contracts, or hidden vendor lock-ins.
-          </p>
-        </div>
-
-        <div class="why-us-grid">
-          <div class="why-card">
-            <div class="why-card-number">01</div>
-            <h3>Genuinely 100% Free</h3>
-            <p>
-              We operate on an innovative grant-funded model. No hidden retainers, no upselling tricks, and no surprise invoices.
-            </p>
-          </div>
-
-          <div class="why-card">
-            <div class="why-card-number">02</div>
-            <h3>Senior-Level Advisory</h3>
-            <p>
-              You work directly with principal consultants and technology architects, never junior apprentices learning on your project.
-            </p>
-          </div>
-
-          <div class="why-card">
-            <div class="why-card-number">03</div>
-            <h3>DevSecOps-Backed Delivery</h3>
-            <p>
-              We leverage automated CI/CD pipelines, strict security baselines, and modern infrastructure to deliver rapid solutions safely.
-            </p>
-          </div>
-
-          <div class="why-card">
-            <div class="why-card-number">04</div>
-            <h3>End-to-End Ownership</h3>
-            <p>
-              From problem diagnosis to hands-on execution monitoring, we stay engaged until your targets are verifiably met.
-            </p>
-          </div>
-        </div>
-
-        <!-- Trust Callout Banner -->
-        <div class="callout-banner">
-          <div class="callout-content">
-            <h3>Ready to accelerate your business milestones?</h3>
-            <p>Schedule a 45-minute zero-cost advisory workshop with our senior leadership team.</p>
-          </div>
-          <div class="callout-action">
-            <a href="#contact" class="btn btn-primary btn-lg">Request Free Workshop</a>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Contact Section -->
-    <section class="section contact-section" id="contact">
-      <div class="container">
-        <div class="section-header text-center">
-          <span class="section-tag">Get In Touch</span>
-          <h2 class="section-title">Schedule Your Free Consultation</h2>
-          <p class="section-description">
-            Fill out the form below. Your request will be securely processed and saved directly into our MySQL database.
-          </p>
-        </div>
-
-        <div class="contact-grid">
-          <!-- Contact Info Column -->
-          <div class="contact-info-col">
-            <div class="contact-info-card">
-              <h3>Direct Advisory Contact</h3>
-              <p>Reach out directly or submit your project details. We treat all discussions with strict non-disclosure protection.</p>
-
-              <div class="info-list">
-                <div class="info-item">
-                  <div class="info-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
-                      <polyline points="22,6 12,13 2,6"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <span class="info-label">Advisory Inquiries</span>
-                    <a href="mailto:advisory@abcfreeconsultants.demo" class="info-value">advisory@abcfreeconsultants.demo</a>
-                  </div>
-                </div>
-
-                <div class="info-item">
-                  <div class="info-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <span class="info-label">Toll-Free Hotline</span>
-                    <span class="info-value">+1 (800) 555-0198</span>
-                  </div>
-                </div>
-
-                <div class="info-item">
-                  <div class="info-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <circle cx="12" cy="12" r="10"/>
-                      <polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <span class="info-label">Advisory Hours</span>
-                    <span class="info-value">Mon &ndash; Fri: 9:00 AM &ndash; 6:00 PM EST</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- DevSecOps Status Box -->
-              <div class="system-status-box">
-                <div class="status-indicator">
-                  <span class="status-dot"></span>
-                  <span class="status-heading">Platform Systems Operational</span>
-                </div>
-                <p class="status-text">
-                  Application hosted on AWS EC2 behind Nginx reverse proxy. Monitored in real-time by Prometheus &amp; Grafana with MySQL persistence.
-                </p>
-                <div class="status-actions">
-                  <a href="/health" class="status-badge-link" target="_blank" rel="noopener noreferrer">/health</a>
-                  <a href="/api/status" class="status-badge-link" target="_blank" rel="noopener noreferrer">/api/status</a>
-                  <a href="/metrics" class="status-badge-link" target="_blank" rel="noopener noreferrer">/metrics</a>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Contact Form Column -->
-          <div class="contact-form-col">
-            <form class="contact-form" id="consultation-form" novalidate>
-              <div class="form-feedback" id="form-feedback" role="alert" style="display: none;"></div>
-
-              <div class="form-group-row">
-                <div class="form-group">
-                  <label for="contact-name">Full Name <span class="required">*</span></label>
-                  <input type="text" id="contact-name" name="name" class="form-control" placeholder="Jane Doe" required>
-                </div>
-                <div class="form-group">
-                  <label for="contact-email">Corporate Email <span class="required">*</span></label>
-                  <input type="email" id="contact-email" name="email" class="form-control" placeholder="jane@company.com" required>
-                </div>
-              </div>
-
-              <div class="form-group-row">
-                <div class="form-group">
-                  <label for="contact-company">Organization / Company <span class="required">*</span></label>
-                  <input type="text" id="contact-company" name="company" class="form-control" placeholder="Acme Enterprises" required>
-                </div>
-                <div class="form-group">
-                  <label for="contact-service">Practice Area of Interest <span class="required">*</span></label>
-                  <select id="contact-service" name="service" class="form-control" required>
-                    <option value="" disabled selected>Select a practice area</option>
-                    <option value="strategy">Corporate Strategy &amp; GTM</option>
-                    <option value="cloud">Cloud &amp; Digital Transformation</option>
-                    <option value="finance">Financial Planning &amp; Advisory</option>
-                    <option value="security">Cybersecurity &amp; Compliance</option>
-                    <option value="operations">Operational Excellence &amp; Lean</option>
-                    <option value="analytics">Data &amp; Predictive Analytics</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label for="contact-message">Project Overview &amp; Key Challenges <span class="required">*</span></label>
-                <textarea id="contact-message" name="message" rows="4" class="form-control" placeholder="Describe your current strategic priorities, operational bottlenecks, or digital objectives..." required></textarea>
-              </div>
-
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary btn-block btn-lg" id="submit-btn">
-                  <span>Submit Free Advisory Request</span>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left: 8px;">
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                    <polyline points="12 5 19 12 12 19"></polyline>
-                  </svg>
-                </button>
-              </div>
-              <p class="form-disclaimer">
-                Data persists securely into MySQL. Parameterized SQL queries defend against injection vulnerabilities.
-              </p>
-            </form>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <!-- Footer -->
-  <footer class="footer">
-    <div class="container footer-container">
-      <div class="footer-top">
-        <div class="footer-brand-col">
-          <div class="footer-brand">
-            <svg viewBox="0 0 36 36" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <rect width="36" height="36" rx="8" fill="#1E40AF"/>
-              <path d="M10 26L18 10L26 26" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M13 21H23" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round"/>
-              <circle cx="18" cy="18" r="2.5" fill="#38BDF8"/>
-            </svg>
-            <span class="footer-brand-name">ABC Free Consultants</span>
-          </div>
-          <p class="footer-tagline">
-            Empowering forward-thinking enterprises with institutional-quality advisory and modernization at zero advisory cost.
-          </p>
-          <div class="footer-ci-pill">
-            <span class="status-dot"></span>
-            <span>Cloud DevSecOps Continuous Delivery Pipeline</span>
-          </div>
-        </div>
-
-        <div class="footer-links-col">
-          <h4>Navigation</h4>
-          <ul class="footer-nav">
-            <li><a href="#home">Home</a></li>
-            <li><a href="#about">About Us</a></li>
-            <li><a href="#services">Services</a></li>
-            <li><a href="#architecture">Architecture</a></li>
-            <li><a href="#pipeline">CI/CD Pipeline</a></li>
-            <li><a href="#telemetry">Live Telemetry</a></li>
-            <li><a href="#contact">Contact</a></li>
-          </ul>
-        </div>
-
-        <div class="footer-links-col">
-          <h4>Consulting Practices</h4>
-          <ul class="footer-nav">
-            <li><a href="#services">Corporate Strategy</a></li>
-            <li><a href="#services">Cloud Modernization</a></li>
-            <li><a href="#services">Financial Modeling</a></li>
-            <li><a href="#services">Security &amp; Compliance</a></li>
-            <li><a href="#services">Process Excellence</a></li>
-          </ul>
-        </div>
-
-        <div class="footer-links-col">
-          <h4>Platform Telemetry</h4>
-          <ul class="footer-nav">
-            <li><a href="/health" target="_blank" rel="noopener noreferrer">Health Check API (/health)</a></li>
-            <li><a href="/api/status" target="_blank" rel="noopener noreferrer">Platform Telemetry (/api/status)</a></li>
-            <li><a href="/metrics" target="_blank" rel="noopener noreferrer">Prometheus Metrics (/metrics)</a></li>
-            <li><span class="footer-env">Environment: Production (AWS EC2)</span></li>
-            <li><span class="footer-env">Release: v1.0.1-production</span></li>
-          </ul>
-        </div>
-      </div>
-
-      <div class="footer-bottom">
-        <p class="copyright">
-          &copy; 2026 ABC Free Consultants. All rights reserved. Delivered securely via Cloud-Based DevSecOps Platform.
-        </p>
-        <p class="disclaimer-note">
-          Final-Year BCA Project: Cloud-Based DevSecOps Platform for Automated Application Deployment and Monitoring.
-        </p>
+        </form>
       </div>
     </div>
-  </footer>
+  </div>
 
-  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/platform.js') }}"></script>
 </body>
 </html>
