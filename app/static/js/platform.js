@@ -21,6 +21,7 @@ const PlatformState = {
 // Initializer
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
+  initSidebarToggle();
   initAutoRefresh();
   initModals();
   loadAllTelemetry();
@@ -33,6 +34,27 @@ document.addEventListener('DOMContentLoaded', () => {
     switchView('dashboard');
   }
 });
+
+// ==============================================================================
+// Sidebar Toggle (Mobile / Tablet)
+// ==============================================================================
+
+function initSidebarToggle() {
+  const toggleBtn = document.getElementById('sidebar-toggle');
+  const sidebar = document.getElementById('platform-sidebar');
+  if (!toggleBtn || !sidebar) return;
+
+  toggleBtn.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+  });
+
+  // Close sidebar when clicking main content on mobile
+  document.querySelector('.platform-stage')?.addEventListener('click', () => {
+    if (sidebar.classList.contains('open')) {
+      sidebar.classList.remove('open');
+    }
+  });
+}
 
 // ==============================================================================
 // Navigation System
@@ -180,12 +202,29 @@ function renderOverview(data) {
   }
 
   // Dashboard KPI Cards
-  setText('kpi-total-projects', m.total_projects ?? 1);
+  const projEl = document.getElementById('kpi-total-projects');
+  if (projEl) projEl.innerHTML = `<span class="code-pill">${m.total_projects ?? 1}</span>`;
+
   setText('kpi-deployment-status', m.deployment_status ?? 'Live');
   setText('kpi-pipeline-status', m.pipeline_status ?? 'PASSED');
   setText('kpi-security-status', m.security_summary?.status ?? 'PASSED');
   setText('kpi-app-health', m.application_health?.status === 'healthy' ? 'Healthy (200 OK)' : 'Degraded');
-  setText('kpi-db-health', m.database_health?.connected ? `Live MySQL (${m.database_health.latency_ms || 12}ms)` : 'Offline');
+  setText('kpi-db-health', m.database_health?.connected ? `MySQL (${m.database_health.latency_ms || 12}ms)` : 'Offline');
+
+  // Pipeline meta
+  setText('kpi-pipeline-meta', m.pipeline_status === 'PASSED' ? 'All verification steps completed' : 'Pipeline status from latest run');
+
+  // Security meta
+  const secSummary = m.security_summary || {};
+  setText('kpi-security-meta', secSummary.statement || 'Loading security data…');
+
+  // Sidebar badges
+  setText('sidebar-projects-count', m.total_projects ?? 1);
+
+  // Dashboard security summary panel
+  setText('dash-sonar-status', secSummary.status?.includes('PASSED') ? 'Gate Passed' : secSummary.status || 'Loading…');
+  setText('dash-trivy-status', secSummary.status?.includes('PASSED') ? 'No Issues' : secSummary.status || 'Loading…');
+  setText('dash-vuln-statement', secSummary.statement || 'Loading vulnerability data…');
 
   // Overview Active Deployment Card
   if (m.latest_deployment) {
@@ -429,7 +468,24 @@ async function loadPipelines() {
     const runs = data.pipeline_runs || [];
     const stages = data.stages || [];
 
-    // 1. Render interactive visual pipeline nodes
+    // Stage descriptions for the 13 stages
+    const stageDescriptions = {
+      'checkout': 'Retrieve the latest source code from GitHub.',
+      'python-check': 'Verify the required Python runtime.',
+      'deps': 'Install application dependencies.',
+      'pytest': 'Execute automated application tests.',
+      'sonarqube': 'Analyze source code quality.',
+      'trivy-fs': 'Scan project files for known vulnerabilities.',
+      'docker-build': 'Package the application into a Docker image.',
+      'trivy-image': 'Scan the container image for vulnerabilities.',
+      'aws-config': 'Prepare secure AWS authentication.',
+      'ecr-login': 'Authenticate with Amazon Elastic Container Registry.',
+      'ecr-push': 'Upload the validated image to AWS ECR.',
+      'ssm-deploy': 'Deploy the application to the AWS EC2 environment.',
+      'health-check': 'Verify the deployed application is responding correctly.'
+    };
+
+    // 1. Render interactive visual pipeline nodes (Pipelines view)
     const flowEl = document.getElementById('visual-pipeline-flow');
     if (flowEl && stages.length > 0) {
       flowEl.innerHTML = stages.map((st, idx) => {
@@ -446,15 +502,77 @@ async function loadPipelines() {
       }).join('');
     }
 
-    // Update badge: e.g. "13/13 Confirmed"
+    // Update badge dynamically
+    const passed = stages.filter(s => s.status === 'PASSED').length;
     const badge = document.getElementById('pipeline-stages-badge');
     if (badge && stages.length > 0) {
-      const passed = stages.filter(s => s.status === 'PASSED').length;
-      badge.textContent = `${passed}/${stages.length} Confirmed`;
+      badge.textContent = `${passed}/${stages.length} Completed`;
       badge.className = `status-badge ${passed === stages.length ? 'success' : 'warning'}`;
     }
 
-    // 2. Render pipeline runs table
+    // Sidebar badge
+    const sidebarBadge = document.getElementById('sidebar-pipeline-badge');
+    if (sidebarBadge && stages.length > 0) {
+      sidebarBadge.textContent = `${passed}/${stages.length}`;
+      sidebarBadge.className = `nav-badge ${passed === stages.length ? 'text-success' : ''}`;
+    }
+
+    // 2. Render pipeline stage detail list (new)
+    const detailList = document.getElementById('pipeline-stages-detail-list');
+    if (detailList && stages.length > 0) {
+      detailList.innerHTML = stages.map((st, idx) => {
+        const stClass = st.status === 'PASSED' ? 'success' : st.status === 'RUNNING' ? 'info' : st.status === 'FAILED' ? 'danger' : 'warning';
+        const desc = stageDescriptions[st.id] || '';
+        return `
+          <div class="pipeline-stage-row" onclick="showStageDetails(${idx})">
+            <div class="stage-number">${String(idx + 1).padStart(2, '0')}</div>
+            <div class="stage-info">
+              <div class="stage-name">${escapeHtml(st.name)}</div>
+              <div class="stage-desc">${escapeHtml(desc)}</div>
+            </div>
+            <div class="stage-status-area">
+              <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">${st.duration || '—'}</span>
+              <span class="status-badge ${stClass}">${escapeHtml(st.status)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 3. Dashboard mini pipeline preview
+    const dashFlow = document.getElementById('dashboard-pipeline-flow');
+    if (dashFlow && stages.length > 0) {
+      const groups = [
+        { label: 'SOURCE', ids: ['checkout'] },
+        { label: 'TEST', ids: ['python-check', 'deps', 'pytest'] },
+        { label: 'QUALITY', ids: ['sonarqube'] },
+        { label: 'SECURITY', ids: ['trivy-fs', 'trivy-image'] },
+        { label: 'BUILD', ids: ['docker-build'] },
+        { label: 'REGISTRY', ids: ['ecr-login', 'ecr-push'] },
+        { label: 'DEPLOY', ids: ['aws-config', 'ssm-deploy'] },
+        { label: 'HEALTH', ids: ['health-check'] }
+      ];
+
+      dashFlow.innerHTML = groups.map((g, gi) => {
+        const groupStages = stages.filter(s => g.ids.includes(s.id));
+        const allPassed = groupStages.length > 0 && groupStages.every(s => s.status === 'PASSED');
+        const anyRunning = groupStages.some(s => s.status === 'RUNNING');
+        const anyFailed = groupStages.some(s => s.status === 'FAILED');
+        const stClass = anyFailed ? 'status-failed' : anyRunning ? 'status-running' : allPassed ? 'status-passed' : 'status-pending';
+        const icon = anyFailed ? '✗' : anyRunning ? '⚡' : allPassed ? '✓' : '⏸';
+        const dur = groupStages.map(s => s.duration || '').filter(Boolean).join(' ');
+        return `
+          <div class="pipeline-node ${stClass}">
+            <div class="pipeline-node-icon">${icon}</div>
+            <div class="pipeline-node-title">${g.label}</div>
+            <div class="pipeline-node-sub">${dur || '—'}</div>
+          </div>
+          ${gi < groups.length - 1 ? '<div class="pipeline-connector"></div>' : ''}
+        `;
+      }).join('');
+    }
+
+    // 4. Render pipeline runs table
     const tbody = document.getElementById('pipeline-runs-table-body');
     if (tbody) {
       if (runs.length === 0) {
@@ -562,13 +680,27 @@ async function loadSecurity() {
     PlatformState.security = data;
 
     const vulns = data.vulnerabilities || {};
-    setText('sec-critical-count', vulns.critical ?? 0);
-    setText('sec-high-count', vulns.high ?? 0);
-    setText('sec-medium-count', vulns.medium ?? 0);
-    setText('sec-low-count', vulns.low ?? 0);
+    const hasData = vulns.has_data !== false;
+    setText('sec-critical-count', hasData ? (vulns.critical ?? 0) : '—');
+    setText('sec-high-count', hasData ? (vulns.high ?? 0) : '—');
+    setText('sec-medium-count', hasData ? (vulns.medium ?? 0) : '—');
+    setText('sec-low-count', hasData ? (vulns.low ?? 0) : '—');
     setText('sec-code-quality', data.code_quality_status || 'PASSED');
-    setText('sec-statement', vulns.summary_statement || '0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan');
-    setText('sec-last-scan-time', data.latest_scan_time || 'Just now');
+    setText('sec-statement', hasData ? (vulns.summary_statement || 'Scan data unavailable') : 'Scan data unavailable');
+    setText('sec-last-scan-time', data.latest_scan_time || 'Not available');
+
+    // Sidebar security badge
+    const secBadge = document.getElementById('sidebar-security-badge');
+    if (secBadge) {
+      const critHigh = (vulns.critical || 0) + (vulns.high || 0);
+      if (hasData) {
+        secBadge.textContent = critHigh === 0 ? 'Clean' : `${critHigh} CVE`;
+        secBadge.className = `nav-badge ${critHigh === 0 ? 'text-success' : ''}`;
+      } else {
+        secBadge.textContent = '—';
+        secBadge.className = 'nav-badge';
+      }
+    }
 
     // Packages list
     const tbody = document.getElementById('security-packages-tbody');
@@ -602,13 +734,13 @@ async function loadSecurity() {
       sqGate.textContent = `Quality Gate: ${sq.quality_gate || 'OFFLINE'}`;
       sqGate.className = `status-badge ${sq.quality_gate === 'PASSED' ? 'success' : sq.quality_gate === 'AUTHENTICATION_REQUIRED' ? 'warning' : 'danger'}`;
     }
-    const m = sq.measures || {};
-    setText('sonar-bugs', m.bugs ?? '—');
-    setText('sonar-vulnerabilities', m.vulnerabilities ?? '—');
-    setText('sonar-code-smells', m.code_smells ?? '—');
-    setText('sonar-security-rating', m.security_rating ?? '—');
-    setText('sonar-reliability', m.reliability_rating ?? '—');
-    setText('sonar-maintainability', m.maintainability_rating ?? '—');
+    const sqm = sq.measures || {};
+    setText('sonar-bugs', sqm.bugs ?? '—');
+    setText('sonar-vulnerabilities', sqm.vulnerabilities ?? '—');
+    setText('sonar-code-smells', sqm.code_smells ?? '—');
+    setText('sonar-security-rating', sqm.security_rating ?? '—');
+    setText('sonar-reliability', sqm.reliability_rating ?? '—');
+    setText('sonar-maintainability', sqm.maintainability_rating ?? '—');
 
     const sqNote = document.getElementById('sonar-status-note');
     if (sqNote) {

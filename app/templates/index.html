@@ -8,20 +8,24 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/platform.css') }}">
 </head>
 <body>
+
+  <!-- Mobile Sidebar Toggle -->
+  <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">☰</button>
+
   <div class="platform-shell">
 
     <!-- ====================================================================
          Sidebar Navigation
          ==================================================================== -->
-    <aside class="platform-sidebar" aria-label="Platform Sidebar">
+    <aside class="platform-sidebar" id="platform-sidebar" aria-label="Platform Sidebar">
       <div class="sidebar-header">
         <div class="sidebar-logo">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
           </svg>
         </div>
         <div class="sidebar-brand">
-          <h1>DevSecOps Platform</h1>
+          <h1>Cloud DevSecOps</h1>
           <p><span class="env-indicator-pill"></span> Production &bull; AWS ap-south-1</p>
         </div>
       </div>
@@ -38,12 +42,12 @@
           </button>
         </li>
         <li>
-          <button class="nav-link-btn" data-view="projects">
+          <button class="nav-link-btn" data-view="pipelines">
             <span class="nav-item-left">
-              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              <span class="nav-item-text">Projects</span>
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <span class="nav-item-text">Pipelines</span>
             </span>
-            <span class="nav-badge" id="sidebar-projects-count">1</span>
+            <span class="nav-badge text-success" id="sidebar-pipeline-badge">—</span>
           </button>
         </li>
         <li>
@@ -55,21 +59,20 @@
           </button>
         </li>
         <li>
-          <button class="nav-link-btn" data-view="pipelines">
-            <span class="nav-item-left">
-              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              <span class="nav-item-text">Pipelines</span>
-            </span>
-            <span class="nav-badge text-success">13/13</span>
-          </button>
-        </li>
-        <li>
           <button class="nav-link-btn" data-view="security">
             <span class="nav-item-left">
               <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               <span class="nav-item-text">Security</span>
             </span>
-            <span class="nav-badge text-success">0 CVE</span>
+            <span class="nav-badge text-success" id="sidebar-security-badge">—</span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-link-btn" data-view="infrastructure">
+            <span class="nav-item-left">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+              <span class="nav-item-text">Infrastructure</span>
+            </span>
           </button>
         </li>
         <li>
@@ -81,11 +84,12 @@
           </button>
         </li>
         <li>
-          <button class="nav-link-btn" data-view="infrastructure">
+          <button class="nav-link-btn" data-view="projects">
             <span class="nav-item-left">
-              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-              <span class="nav-item-text">Infrastructure</span>
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span class="nav-item-text">Projects</span>
             </span>
+            <span class="nav-badge" id="sidebar-projects-count">1</span>
           </button>
         </li>
         <li>
@@ -100,7 +104,7 @@
 
       <!-- Demo App Preview Trigger & Runner Info -->
       <div class="sidebar-footer">
-        <div class="cluster-card" style="margin-bottom: 12px; cursor: pointer;" onclick="openDemoAppModal()">
+        <div class="cluster-card" style="margin-bottom: 8px; cursor: pointer;" onclick="openDemoAppModal()">
           <div class="cluster-card-title">
             <span>Demo Application</span>
             <span class="status-badge success">Live</span>
@@ -170,186 +174,266 @@
         <section class="platform-view-panel active" id="view-dashboard">
           <div class="view-header">
             <div class="view-header-title">
-              <h2>Engineering Operations Dashboard</h2>
-              <p>Unified telemetry, deployment status, and security gate monitoring for all cloud workloads.</p>
+              <h2>Cloud DevSecOps Platform</h2>
+              <p>Automated delivery, security and cloud infrastructure — end-to-end pipeline visibility</p>
             </div>
             <div class="view-header-actions">
-              <button class="btn-platform btn-platform-outline" onclick="openLogsModal()">View Platform Logs</button>
-              <button class="btn-platform btn-platform-primary" onclick="openModal('modal-onboard-project')">+ Create Project</button>
+              <button class="btn-platform btn-platform-outline" onclick="openLogsModal()">Platform Logs</button>
+              <button class="btn-platform btn-platform-primary" onclick="openModal('modal-onboard-project')">+ New Project</button>
             </div>
           </div>
 
-          <!-- KPI Cards Grid -->
+          <!-- Overview Summary Cards -->
           <div class="kpi-grid">
             <div class="kpi-card">
               <div class="kpi-header">
-                <span class="kpi-label">Total Projects</span>
-                <span class="kpi-icon">&#128193;</span>
-              </div>
-              <div class="kpi-value" id="kpi-total-projects">1</div>
-              <div class="kpi-meta"><span class="status-badge success">Active</span> 1 Demo Connected</div>
-            </div>
-
-            <div class="kpi-card">
-              <div class="kpi-header">
-                <span class="kpi-label">Deployment Status</span>
-                <span class="kpi-icon">&#9889;</span>
-              </div>
-              <div class="kpi-value text-success" id="kpi-deployment-status">Live</div>
-              <div class="kpi-meta">Target: EC2 via SSM</div>
-            </div>
-
-            <div class="kpi-card">
-              <div class="kpi-header">
                 <span class="kpi-label">Pipeline Status</span>
-                <span class="kpi-icon">&#10003;</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
               </div>
-              <div class="kpi-value" id="kpi-pipeline-status" style="color: var(--color-success);">PASSED</div>
-              <div class="kpi-meta">13/13 Verification Steps</div>
+              <div class="kpi-value" id="kpi-pipeline-status" style="color: var(--color-success);">—</div>
+              <div class="kpi-meta" id="kpi-pipeline-meta">Loading pipeline data…</div>
             </div>
 
             <div class="kpi-card">
               <div class="kpi-header">
                 <span class="kpi-label">Security Gate</span>
-                <span class="kpi-icon">&#128737;</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               </div>
-              <div class="kpi-value" id="kpi-security-status" style="color: var(--color-brand-light);">PASSED</div>
-              <div class="kpi-meta">0 Critical / High CVEs</div>
+              <div class="kpi-value" id="kpi-security-status" style="color: var(--color-brand-light);">—</div>
+              <div class="kpi-meta" id="kpi-security-meta">Loading security data…</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <span class="kpi-label">Deployment</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted)"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></svg>
+              </div>
+              <div class="kpi-value text-success" id="kpi-deployment-status">—</div>
+              <div class="kpi-meta">Target: EC2 via SSM</div>
             </div>
 
             <div class="kpi-card">
               <div class="kpi-header">
                 <span class="kpi-label">Application Health</span>
-                <span class="kpi-icon">&#9829;</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted)"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
               </div>
-              <div class="kpi-value" id="kpi-app-health" style="font-size: 20px;">Healthy (200 OK)</div>
+              <div class="kpi-value" id="kpi-app-health" style="font-size: 20px;">—</div>
               <div class="kpi-meta">Nginx Reverse Proxy Active</div>
             </div>
 
             <div class="kpi-card">
               <div class="kpi-header">
                 <span class="kpi-label">Database Health</span>
-                <span class="kpi-icon">&#128452;</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted)"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
               </div>
-              <div class="kpi-value" id="kpi-db-health" style="font-size: 20px;">Live MySQL</div>
-              <div class="kpi-meta">Latency: &lt; 15ms (PyMySQL)</div>
+              <div class="kpi-value" id="kpi-db-health" style="font-size: 20px;">—</div>
+              <div class="kpi-meta">PyMySQL Driver</div>
             </div>
           </div>
 
-          <!-- Active Deployment & Git Telemetry -->
-          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 24px;">
-            <div class="panel-card" style="margin-bottom: 0;">
-              <div class="panel-card-header">
-                <div class="panel-card-title">
-                  <span>Latest Deployment Telemetry</span>
-                </div>
-                <span class="status-badge success">Verified in Production</span>
-              </div>
-              <div class="panel-card-body">
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px;">
-                  <div>
-                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Deployment ID</span>
-                    <div style="margin-top: 4px;"><span class="code-pill" id="dash-latest-dep-id">DEP-202609-01</span></div>
-                  </div>
-                  <div>
-                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Target Instance</span>
-                    <div style="margin-top: 4px;"><span class="code-pill">i-0fb9dcbeb35b4fdbe</span></div>
-                  </div>
-                  <div>
-                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Duration</span>
-                    <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: #fff;" id="dash-latest-dep-duration">195s</div>
-                  </div>
-                </div>
-                <div style="background-color: var(--bg-surface); padding: 12px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
-                  <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Deployment Log Excerpt:</div>
-                  <div style="font-family: var(--font-mono); font-size: 11.5px; color: var(--color-brand-light);">
-                    Docker pull completed &bull; Containers refreshed on devsecops-network &bull; Nginx proxy active &bull; Prometheus scrape healthy
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="panel-card" style="margin-bottom: 0;">
-              <div class="panel-card-header">
-                <div class="panel-card-title">
-                  <span>Git Repository State</span>
-                </div>
-                <span class="code-pill" id="dash-git-branch">main</span>
-              </div>
-              <div class="panel-card-body">
-                <div style="margin-bottom: 12px;">
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Latest Commit</span>
-                  <div style="margin-top: 4px;"><span class="code-pill" id="dash-git-commit">bf6b812</span></div>
-                </div>
-                <div style="margin-bottom: 12px;">
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Commit Message</span>
-                  <div style="margin-top: 4px; font-size: 13px; color: #fff;" id="dash-git-msg">Update demo heading for CI/CD deployment</div>
-                </div>
-                <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Author</span>
-                  <div style="margin-top: 4px; font-size: 12px; color: var(--text-secondary);" id="dash-git-author">Mohd Shahid</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Visual Pipeline Preview Card -->
+          <!-- CI/CD Pipeline Preview -->
           <div class="panel-card">
             <div class="panel-card-header">
               <div class="panel-card-title">
-                <span>Automated CI/CD Pipeline Execution</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-brand-light)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <span>CI/CD Pipeline</span>
               </div>
               <button class="btn-platform btn-platform-outline btn-platform-sm" onclick="switchView('pipelines')">View Full Pipeline &rarr;</button>
             </div>
             <div class="panel-card-body">
+              <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px;">Automated software delivery lifecycle — 13-stage verification pipeline</p>
               <div class="pipeline-flow-container">
                 <div class="pipeline-flow" id="dashboard-pipeline-flow">
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">SOURCE</div>
-                    <div class="pipeline-node-sub">Checkout &bull; 3s</div>
+                    <div class="pipeline-node-sub">Loading…</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">TEST</div>
-                    <div class="pipeline-node-sub">pytest 9/9 &bull; 6s</div>
+                    <div class="pipeline-node-sub">—</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">QUALITY</div>
-                    <div class="pipeline-node-sub">SonarQube &bull; 42s</div>
+                    <div class="pipeline-node-sub">—</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">SECURITY</div>
-                    <div class="pipeline-node-sub">Trivy Scan &bull; 14s</div>
+                    <div class="pipeline-node-sub">—</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">BUILD</div>
-                    <div class="pipeline-node-sub">Docker &bull; 38s</div>
+                    <div class="pipeline-node-sub">—</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">REGISTRY</div>
-                    <div class="pipeline-node-sub">ECR Push &bull; 51s</div>
+                    <div class="pipeline-node-sub">—</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">DEPLOY</div>
-                    <div class="pipeline-node-sub">EC2 SSM &bull; 68s</div>
+                    <div class="pipeline-node-sub">—</div>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-node status-passed">
-                    <div class="pipeline-node-icon">&#10003;</div>
+                  <div class="pipeline-node status-pending">
+                    <div class="pipeline-node-icon">⏸</div>
                     <div class="pipeline-node-title">HEALTH</div>
-                    <div class="pipeline-node-sub">HTTP 200 &bull; 5s</div>
+                    <div class="pipeline-node-sub">—</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Latest Deployment & Git Telemetry -->
+          <div class="grid-2-1 mb-5">
+            <div class="panel-card mb-0">
+              <div class="panel-card-header">
+                <div class="panel-card-title">
+                  <span>Latest Deployment</span>
+                </div>
+                <span class="status-badge success">Production</span>
+              </div>
+              <div class="panel-card-body">
+                <div class="grid-3 mb-4">
+                  <div>
+                    <span class="meta-label">Deployment ID</span>
+                    <div style="margin-top: 4px;"><span class="code-pill" id="dash-latest-dep-id">—</span></div>
+                  </div>
+                  <div>
+                    <span class="meta-label">Commit</span>
+                    <div style="margin-top: 4px;"><span class="code-pill" id="dash-latest-commit">—</span></div>
+                  </div>
+                  <div>
+                    <span class="meta-label">Duration</span>
+                    <div class="meta-value-mono" id="dash-latest-dep-duration">—</div>
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div>
+                    <span class="meta-label">Timestamp</span>
+                    <div class="meta-value-mono" id="dash-latest-dep-time">—</div>
+                  </div>
+                  <div>
+                    <span class="meta-label">Status</span>
+                    <div style="margin-top: 4px;"><span class="status-badge success" id="dash-latest-dep-status">—</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel-card mb-0">
+              <div class="panel-card-header">
+                <div class="panel-card-title">
+                  <span>Git Repository</span>
+                </div>
+                <span class="code-pill" id="dash-git-branch">main</span>
+              </div>
+              <div class="panel-card-body">
+                <div style="margin-bottom: 14px;">
+                  <span class="meta-label">Latest Commit</span>
+                  <div style="margin-top: 4px;"><span class="code-pill" id="dash-git-commit">—</span></div>
+                </div>
+                <div style="margin-bottom: 14px;">
+                  <span class="meta-label">Commit Message</span>
+                  <div class="meta-value" id="dash-git-msg">—</div>
+                </div>
+                <div>
+                  <span class="meta-label">Author</span>
+                  <div class="meta-value-mono" id="dash-git-author">—</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Deployment & Infrastructure Visual Flow -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-info)"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                <span>Deployment &amp; Infrastructure</span>
+              </div>
+              <button class="btn-platform btn-platform-outline btn-platform-sm" onclick="switchView('infrastructure')">View Details &rarr;</button>
+            </div>
+            <div class="panel-card-body">
+              <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 16px;">Production delivery path — Code to Cloud</p>
+              <div class="pipeline-flow-container">
+                <div class="infra-flow">
+                  <div class="infra-node"><div class="infra-node-icon">📦</div><div class="infra-node-label">GitHub</div><div class="infra-node-sub">Source</div></div>
+                  <div class="infra-connector"></div>
+                  <div class="infra-node"><div class="infra-node-icon">⚡</div><div class="infra-node-label">Actions</div><div class="infra-node-sub">CI/CD</div></div>
+                  <div class="infra-connector"></div>
+                  <div class="infra-node"><div class="infra-node-icon">🐳</div><div class="infra-node-label">Docker</div><div class="infra-node-sub">Container</div></div>
+                  <div class="infra-connector"></div>
+                  <div class="infra-node"><div class="infra-node-icon">📋</div><div class="infra-node-label">ECR</div><div class="infra-node-sub">Registry</div></div>
+                  <div class="infra-connector"></div>
+                  <div class="infra-node"><div class="infra-node-icon">☁️</div><div class="infra-node-label">EC2</div><div class="infra-node-sub">ap-south-1</div></div>
+                  <div class="infra-connector"></div>
+                  <div class="infra-node"><div class="infra-node-icon">🔀</div><div class="infra-node-label">Nginx</div><div class="infra-node-sub">Proxy</div></div>
+                  <div class="infra-connector"></div>
+                  <div class="infra-node" style="border-color: var(--color-success-border);"><div class="infra-node-icon">✅</div><div class="infra-node-label">Application</div><div class="infra-node-sub">Production</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Application Health & Quick Security -->
+          <div class="grid-2">
+            <div class="panel-card mb-0">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Application Health</div>
+                <span class="status-badge success" id="dash-app-health-badge">Healthy</span>
+              </div>
+              <div class="panel-card-body">
+                <div class="grid-2">
+                  <div>
+                    <span class="meta-label">Health Check</span>
+                    <div style="margin-top: 4px;"><a href="/health" target="_blank" rel="noopener noreferrer" class="code-pill" style="text-decoration:none">/health</a></div>
+                  </div>
+                  <div>
+                    <span class="meta-label">API Status</span>
+                    <div style="margin-top: 4px;"><a href="/api/status" target="_blank" rel="noopener noreferrer" class="code-pill" style="text-decoration:none">/api/status</a></div>
+                  </div>
+                  <div>
+                    <span class="meta-label">Metrics</span>
+                    <div style="margin-top: 4px;"><a href="/metrics" target="_blank" rel="noopener noreferrer" class="code-pill" style="text-decoration:none">/metrics</a></div>
+                  </div>
+                  <div>
+                    <span class="meta-label">Projects</span>
+                    <div style="margin-top: 4px;" id="kpi-total-projects"><span class="code-pill">1</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="panel-card mb-0">
+              <div class="panel-card-header">
+                <div class="panel-card-title">Quick Security Summary</div>
+                <button class="btn-platform btn-platform-outline btn-platform-sm" onclick="switchView('security')">Security Center &rarr;</button>
+              </div>
+              <div class="panel-card-body">
+                <div class="grid-2">
+                  <div>
+                    <span class="meta-label">SonarQube</span>
+                    <div style="margin-top: 4px; font-weight: 600; color: var(--text-primary);" id="dash-sonar-status">Loading…</div>
+                  </div>
+                  <div>
+                    <span class="meta-label">Trivy Scan</span>
+                    <div style="margin-top: 4px; font-weight: 600; color: var(--text-primary);" id="dash-trivy-status">Loading…</div>
+                  </div>
+                  <div style="grid-column: span 2;">
+                    <span class="meta-label">Vulnerability Statement</span>
+                    <div class="meta-value-mono" id="dash-vuln-statement">Loading…</div>
                   </div>
                 </div>
               </div>
@@ -422,7 +506,7 @@
               <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
                 Rollback is architecturally supported via historical immutable Amazon ECR image tags redeployed to target EC2 instance <span class="code-pill">i-0fb9dcbeb35b4fdbe</span> via AWS Systems Manager.
               </p>
-              <div style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);">
+              <div class="meta-value-mono">
                 Strategy: Tagged container pull &bull; Automated pre-flight health validation &bull; Graceful Nginx upstream transition
               </div>
             </div>
@@ -459,31 +543,43 @@
         <section class="platform-view-panel" id="view-pipelines">
           <div class="view-header">
             <div class="view-header-title">
-              <h2>Visual CI/CD Pipelines</h2>
-              <p>Real 13-stage verification pipeline mapped directly to the GitHub Actions execution workflow.</p>
+              <h2>CI/CD Pipeline</h2>
+              <p>Automated software delivery lifecycle — 13-stage verification mapped to GitHub Actions</p>
             </div>
             <div class="view-header-actions">
-              <button class="btn-platform btn-platform-primary" id="btn-run-pipeline" onclick="triggerPipelineRun()">Run Pipeline Now</button>
+              <a href="https://github.com/mohdshahid7033/cloud-devsecops-platform/actions" target="_blank" rel="noopener noreferrer" class="btn-platform btn-platform-outline">View on GitHub</a>
+              <button class="btn-platform btn-platform-primary" id="btn-run-pipeline" onclick="triggerPipelineRun()">Run Pipeline</button>
             </div>
           </div>
 
-          <!-- 13 Mapped Stages Visualizer -->
+          <!-- 13-Stage Pipeline Visualizer -->
           <div class="panel-card">
             <div class="panel-card-header">
               <div class="panel-card-title">
-                <span>Pipeline Stage Execution (13 Mapped Workflow Steps)</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-brand-light)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <span>Pipeline Stage Execution</span>
               </div>
-              <span class="status-badge success" id="pipeline-stages-badge">13/13 Confirmed</span>
+              <span class="status-badge success" id="pipeline-stages-badge">Loading…</span>
             </div>
             <div class="panel-card-body">
               <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 16px;">
-                Click any step below to inspect command invocation, execution time, and step parameters:
+                Click any stage to inspect command invocation, execution time, and parameters
               </p>
               <div class="pipeline-flow-container">
                 <div class="pipeline-flow" id="visual-pipeline-flow">
                   <!-- Populated via loadPipelines() -->
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Detailed 13-Stage List -->
+          <div class="panel-card">
+            <div class="panel-card-header">
+              <div class="panel-card-title">Stage Details</div>
+            </div>
+            <div class="pipeline-stages-list" id="pipeline-stages-detail-list">
+              <!-- Populated via loadPipelines() -->
             </div>
           </div>
 
@@ -531,87 +627,87 @@
           <div class="kpi-grid">
             <div class="kpi-card">
               <div class="kpi-header"><span class="kpi-label">Critical CVEs</span></div>
-              <div class="kpi-value text-success" id="sec-critical-count">0</div>
+              <div class="kpi-value text-success" id="sec-critical-count">—</div>
               <div class="kpi-meta">Severity: CRITICAL</div>
             </div>
             <div class="kpi-card">
               <div class="kpi-header"><span class="kpi-label">High CVEs</span></div>
-              <div class="kpi-value text-success" id="sec-high-count">0</div>
+              <div class="kpi-value text-success" id="sec-high-count">—</div>
               <div class="kpi-meta">Severity: HIGH</div>
             </div>
             <div class="kpi-card">
               <div class="kpi-header"><span class="kpi-label">Medium CVEs</span></div>
-              <div class="kpi-value" id="sec-medium-count">0</div>
+              <div class="kpi-value" id="sec-medium-count">—</div>
               <div class="kpi-meta">Severity: MEDIUM</div>
             </div>
             <div class="kpi-card">
               <div class="kpi-header"><span class="kpi-label">Low CVEs</span></div>
-              <div class="kpi-value" id="sec-low-count">0</div>
+              <div class="kpi-value" id="sec-low-count">—</div>
               <div class="kpi-meta">Severity: LOW</div>
             </div>
           </div>
 
           <!-- Verified Scan Banner -->
-          <div class="panel-card" style="border-left: 3px solid var(--color-success); margin-bottom: 20px;">
-            <div class="panel-card-body" style="display: flex; justify-content: space-between; align-items: center;">
+          <div class="panel-card mb-5" style="border-left: 3px solid var(--color-success);">
+            <div class="panel-card-body" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
               <div>
-                <div style="font-weight: 700; color: #fff; font-size: 15px;" id="sec-statement">
-                  0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan
+                <div style="font-weight: 700; color: #fff; font-size: 14px;" id="sec-statement">
+                  Loading scan data…
                 </div>
                 <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
                   Scan Target: <span class="code-pill">app/requirements.txt</span> &bull; Base: Alpine Multi-Stage Container &bull; Engine: Aqua Security Trivy
                 </div>
               </div>
-              <div style="text-align: right;">
-                <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Last Scan Timestamp</div>
-                <div style="font-family: var(--font-mono); font-size: 12px; color: #fff;" id="sec-last-scan-time">Just now</div>
+              <div style="text-align: right; flex-shrink: 0;">
+                <div class="meta-label">Last Scan</div>
+                <div class="meta-value-mono" id="sec-last-scan-time">—</div>
               </div>
             </div>
           </div>
 
           <!-- SonarQube Static Code Analysis (SAST) -->
-          <div class="panel-card" style="border-left: 3px solid var(--color-brand-light); margin-bottom: 20px;">
+          <div class="panel-card mb-5" style="border-left: 3px solid var(--color-brand-light);">
             <div class="panel-card-header">
               <div class="panel-card-title">
                 <span>SonarQube Static Code Analysis (SAST)</span>
               </div>
-              <span class="status-badge info" id="sonar-quality-gate">Quality Gate: Checking...</span>
+              <span class="status-badge info" id="sonar-quality-gate">Quality Gate: Checking…</span>
             </div>
             <div class="panel-card-body">
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; margin-bottom: 12px;">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 14px; margin-bottom: 12px;">
                 <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Bugs</span>
+                  <span class="meta-label">Bugs</span>
                   <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-bugs">—</div>
                 </div>
                 <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Vulnerabilities</span>
+                  <span class="meta-label">Vulnerabilities</span>
                   <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-vulnerabilities">—</div>
                 </div>
                 <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Code Smells</span>
+                  <span class="meta-label">Code Smells</span>
                   <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-code-smells">—</div>
                 </div>
                 <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Security Rating</span>
+                  <span class="meta-label">Security Rating</span>
                   <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-security-rating">—</div>
                 </div>
                 <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Reliability</span>
+                  <span class="meta-label">Reliability</span>
                   <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-reliability">—</div>
                 </div>
                 <div>
-                  <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Maintainability</span>
+                  <span class="meta-label">Maintainability</span>
                   <div style="margin-top: 4px; font-weight: 700; font-size: 16px; color: #fff;" id="sonar-maintainability">—</div>
                 </div>
               </div>
-              <div style="font-size: 11.5px; color: var(--text-secondary); font-family: var(--font-mono); border-top: 1px solid var(--border-subtle); padding-top: 8px;" id="sonar-status-note">
-                SonarQube Integration: Server status loading...
+              <div class="meta-value-mono" style="border-top: 1px solid var(--border-subtle); padding-top: 10px;" id="sonar-status-note">
+                SonarQube Integration: Server status loading…
               </div>
             </div>
           </div>
 
           <!-- Packages & Whitelist -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div class="grid-2">
             <div class="panel-card">
               <div class="panel-card-header">
                 <div class="panel-card-title">Analyzed Application Packages</div>
@@ -666,7 +762,7 @@
             </div>
             <div class="view-header-actions">
               <a href="http://localhost:3000/d/devsecops-app-monitoring" target="_blank" rel="noopener noreferrer" class="btn-platform btn-platform-outline">
-                Open Grafana Dashboard &rarr;
+                Open Grafana &rarr;
               </a>
               <a href="http://localhost:9090" target="_blank" rel="noopener noreferrer" class="btn-platform btn-platform-outline">
                 Open Prometheus &rarr;
@@ -677,14 +773,14 @@
           <div class="kpi-grid">
             <div class="kpi-card">
               <div class="kpi-header"><span class="kpi-label">Application Uptime</span></div>
-              <div class="kpi-value" id="mon-uptime">0h 0m 0s</div>
+              <div class="kpi-value" id="mon-uptime">—</div>
               <div class="kpi-meta">Continuous Container Uptime</div>
             </div>
 
             <div class="kpi-card">
               <div class="kpi-header"><span class="kpi-label">Database Status</span></div>
-              <div class="kpi-value text-success" id="mon-db-status" style="font-size: 19px;">Connected</div>
-              <div class="kpi-meta" id="mon-db-latency">Latency: 8 ms</div>
+              <div class="kpi-value text-success" id="mon-db-status" style="font-size: 19px;">—</div>
+              <div class="kpi-meta" id="mon-db-latency">Latency: — ms</div>
             </div>
 
             <div class="kpi-card">
@@ -701,7 +797,7 @@
           </div>
 
           <!-- HTTP Distribution & Target Status -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div class="grid-2">
             <div class="panel-card">
               <div class="panel-card-header">
                 <div class="panel-card-title">HTTP Response Code Distribution</div>
@@ -717,14 +813,14 @@
                 <span class="status-badge success" id="mon-prom-target">UP</span>
               </div>
               <div class="panel-card-body">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="grid-2">
                   <div>
-                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Scrape Endpoint</span>
+                    <span class="meta-label">Scrape Endpoint</span>
                     <div style="margin-top: 4px;"><span class="code-pill">devsecops-app:5000/metrics</span></div>
                   </div>
                   <div>
-                    <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Interval</span>
-                    <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: #fff;">15 seconds</div>
+                    <span class="meta-label">Interval</span>
+                    <div class="meta-value">15 seconds</div>
                   </div>
                 </div>
               </div>
@@ -749,64 +845,64 @@
             <span style="font-weight: 700; color: #fff; font-size: 14px;">Live AWS Infrastructure &amp; Cloud Workloads</span>
           </div>
 
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px;">
-            <div class="panel-card" style="margin-bottom: 0;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-6);">
+            <div class="panel-card mb-0">
               <div class="panel-card-header">
                 <div class="panel-card-title">AWS EC2 Server</div>
                 <span class="status-badge success">Online</span>
               </div>
               <div class="panel-card-body">
-                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Instance ID:</div>
-                <div class="code-pill" id="infra-ec2-id">i-0fb9dcbeb35b4fdbe</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px; margin-bottom: 4px;">Instance Type &bull; AMI:</div>
-                <div style="font-size: 13px; color: #fff;"><span id="infra-ec2-type">t3.micro</span> &bull; <span id="infra-ec2-ami">ami-0ee11497c4eac651d</span></div>
+                <div class="meta-label">Instance ID:</div>
+                <div class="code-pill" id="infra-ec2-id" style="margin-top: 4px;">i-0fb9dcbeb35b4fdbe</div>
+                <div class="meta-label" style="margin-top: 10px;">Instance Type &bull; AMI:</div>
+                <div class="meta-value"><span id="infra-ec2-type">t3.micro</span> &bull; <span id="infra-ec2-ami">ami-0ee11497c4eac651d</span></div>
               </div>
             </div>
 
-            <div class="panel-card" style="margin-bottom: 0;">
+            <div class="panel-card mb-0">
               <div class="panel-card-header">
                 <div class="panel-card-title">Amazon ECR Registry</div>
                 <span class="status-badge success">Active</span>
               </div>
               <div class="panel-card-body">
-                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Repository URI:</div>
-                <div class="code-pill" style="font-size: 11px; word-break: break-all;" id="infra-ecr-repo">850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px; margin-bottom: 4px;">Region:</div>
-                <div style="font-size: 13px; color: #fff;">ap-south-1 (Mumbai)</div>
+                <div class="meta-label">Repository URI:</div>
+                <div class="code-pill" style="font-size: 11px; word-break: break-all; margin-top: 4px;" id="infra-ecr-repo">850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest</div>
+                <div class="meta-label" style="margin-top: 10px;">Region:</div>
+                <div class="meta-value">ap-south-1 (Mumbai)</div>
               </div>
             </div>
 
-            <div class="panel-card" style="margin-bottom: 0;">
+            <div class="panel-card mb-0">
               <div class="panel-card-header">
                 <div class="panel-card-title">Ingress &amp; Orchestration</div>
               </div>
               <div class="panel-card-body">
-                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Nginx Reverse Proxy:</div>
-                <div style="font-size: 13px; color: var(--color-success); font-weight: 600;" id="infra-nginx-health">Healthy (Port 80)</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-top: 10px; margin-bottom: 4px;">AWS Systems Manager:</div>
-                <div style="font-size: 13px; color: #fff;">Zero SSH Bastion (Encrypted Run Command)</div>
+                <div class="meta-label">Nginx Reverse Proxy:</div>
+                <div style="margin-top: 4px; font-size: 13px; color: var(--color-success); font-weight: 600;" id="infra-nginx-health">Healthy (Port 80)</div>
+                <div class="meta-label" style="margin-top: 10px;">AWS Systems Manager:</div>
+                <div class="meta-value">Zero SSH Bastion (Encrypted Run Command)</div>
               </div>
             </div>
           </div>
 
           <!-- Terraform Resources -->
-          <div class="panel-card" style="margin-bottom: 28px;">
+          <div class="panel-card mb-6">
             <div class="panel-card-header">
               <div class="panel-card-title">Terraform-Managed Cloud Resources</div>
               <span class="code-pill">terraform/main.tf</span>
             </div>
             <div class="panel-card-body">
-              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+              <div class="grid-3">
                 <div>
-                  <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">VPC Network</div>
+                  <div class="meta-label">VPC Network</div>
                   <div style="margin-top: 4px;"><span class="code-pill" id="infra-tf-vpc">10.0.0.0/16</span></div>
                 </div>
                 <div>
-                  <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Subnet (ap-south-1a)</div>
+                  <div class="meta-label">Subnet (ap-south-1a)</div>
                   <div style="margin-top: 4px;"><span class="code-pill" id="infra-tf-subnet">10.0.1.0/24</span></div>
                 </div>
                 <div>
-                  <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Security Group</div>
+                  <div class="meta-label">Security Group</div>
                   <div style="margin-top: 4px;"><span class="code-pill" id="infra-tf-sg">Ports 80, 3000 Ingress</span></div>
                 </div>
               </div>
@@ -820,7 +916,7 @@
           </div>
 
           <!-- Docker Engine Containers -->
-          <div class="panel-card" style="margin-bottom: 20px;">
+          <div class="panel-card mb-5">
             <div class="panel-card-header">
               <div class="panel-card-title">Docker Engine Containers</div>
             </div>
@@ -912,6 +1008,23 @@
         </section>
 
       </div>
+
+      <!-- Footer -->
+      <footer class="platform-footer">
+        <div class="footer-left">
+          <span>Cloud-Based DevSecOps Platform</span>
+          <span>&bull;</span>
+          <span>v1.0.1-production</span>
+          <span>&bull;</span>
+          <span>ABC Free Consultants</span>
+        </div>
+        <div class="footer-links">
+          <a href="/health" target="_blank" rel="noopener noreferrer" class="footer-link">/health</a>
+          <a href="/api/status" target="_blank" rel="noopener noreferrer" class="footer-link">/api/status</a>
+          <a href="/metrics" target="_blank" rel="noopener noreferrer" class="footer-link">/metrics</a>
+          <a href="/demo" target="_blank" rel="noopener noreferrer" class="footer-link">Demo App</a>
+        </div>
+      </footer>
     </main>
   </div>
 
@@ -986,30 +1099,30 @@
         <button class="modal-close-btn">&times;</button>
       </div>
       <div class="modal-body">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+        <div class="grid-2 mb-4">
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Project Identifier</span>
+            <span class="meta-label">Project Identifier</span>
             <div style="margin-top: 4px;"><span class="code-pill" id="proj-modal-id"></span></div>
           </div>
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Branch &bull; Environment</span>
+            <span class="meta-label">Branch &bull; Environment</span>
             <div style="margin-top: 4px;"><span class="code-pill" id="proj-modal-branch"></span> &bull; <span class="status-badge info" id="proj-modal-env"></span></div>
           </div>
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Health Status</span>
+            <span class="meta-label">Health Status</span>
             <div style="margin-top: 4px; font-weight: 600; color: var(--color-success);" id="proj-modal-health">Healthy</div>
           </div>
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Database Status</span>
+            <span class="meta-label">Database Status</span>
             <div style="margin-top: 4px; font-weight: 600; color: var(--color-success);" id="proj-modal-db">Connected</div>
           </div>
           <div style="grid-column: span 2;">
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Repository URL</span>
+            <span class="meta-label">Repository URL</span>
             <div style="margin-top: 4px;"><a id="proj-modal-repo" href="#" target="_blank" style="color: var(--color-brand-light); font-family: var(--font-mono); font-size: 12px;"></a></div>
           </div>
           <div style="grid-column: span 2;">
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Latest Commit</span>
-            <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 12px; color: #fff;" id="proj-modal-commit"></div>
+            <span class="meta-label">Latest Commit</span>
+            <div class="meta-value-mono" id="proj-modal-commit"></div>
           </div>
         </div>
       </div>
@@ -1029,28 +1142,28 @@
         <button class="modal-close-btn">&times;</button>
       </div>
       <div class="modal-body">
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px;">
+        <div class="grid-3 mb-4">
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Stage ID</span>
+            <span class="meta-label">Stage ID</span>
             <div style="margin-top: 4px;"><span class="code-pill" id="stage-modal-id">—</span></div>
           </div>
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Stage Status</span>
+            <span class="meta-label">Stage Status</span>
             <div style="margin-top: 4px;"><span class="status-badge success" id="stage-modal-status">PASSED</span></div>
           </div>
           <div>
-            <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Step Duration</span>
-            <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: #fff;" id="stage-modal-duration">0s</div>
+            <span class="meta-label">Step Duration</span>
+            <div class="meta-value-mono" id="stage-modal-duration">0s</div>
           </div>
         </div>
         <div style="margin-bottom: 14px;">
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Executed Command / Workflow Action</span>
+          <span class="meta-label">Executed Command / Workflow Action</span>
           <div class="terminal-view" style="margin-top: 6px;">
             <div class="terminal-line info" id="stage-modal-command"></div>
           </div>
         </div>
         <div id="stage-modal-error-box" style="display: none;">
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--color-danger); font-weight: 600;">Failure Telemetry / Error Message</span>
+          <span class="meta-label" style="color: var(--color-danger);">Failure Telemetry / Error Message</span>
           <div class="terminal-view" style="margin-top: 6px; border-color: var(--color-danger-border);">
             <div class="terminal-line error" id="stage-modal-error"></div>
           </div>
@@ -1093,8 +1206,8 @@
         <button class="modal-close-btn">&times;</button>
       </div>
       <div class="modal-body">
-        <div style="background-color: var(--bg-surface); padding: 14px 18px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 20px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="background-color: var(--bg-card); padding: 14px 18px; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <div>
               <span class="status-badge success">Deployed Workload</span>
               <strong style="margin-left: 8px; color: #fff;">ABC Free Consultants Enterprise Advisory</strong>
