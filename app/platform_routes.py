@@ -40,29 +40,37 @@ def get_overview():
     infra_data = platform_service.get_infrastructure_details()
 
     projects = database.get_projects()
-    latest_dep = database.get_latest_deployment()
-    latest_pipe = database.get_latest_pipeline_run()
-
     gh_data = platform_service.get_real_github_pipeline_data()
-    if not latest_pipe and gh_data:
+    latest_dep = None
+    latest_pipe = None
+
+    if gh_data and gh_data.get("run"):
+        run = gh_data["run"]
         latest_pipe = {
-            "run_id": str(gh_data["run"].get("id")),
-            "status": "PASSED" if gh_data["run"].get("conclusion") == "success" else "FAILED",
-            "branch": gh_data["run"].get("head_branch"),
-            "commit_hash": gh_data["run"].get("head_sha")[:7] if gh_data["run"].get("head_sha") else "",
-            "stages": gh_data["stages"],
-            "created_at": gh_data["run"].get("created_at")
+            "run_id": str(run.get("id")),
+            "status": "PASSED" if run.get("conclusion") == "success" else "FAILED",
+            "branch": run.get("head_branch"),
+            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+            "stages": gh_data.get("stages", []),
+            "created_at": run.get("created_at")
         }
     
-    if not latest_dep and gh_data and gh_data.get("deploy_step"):
-        dep_step = gh_data["deploy_step"]
-        latest_dep = {
-            "deployment_id": f"DEP-{gh_data['run'].get('id')}",
-            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
-            "environment": "Production",
-            "deployed_by": "GitHub Actions",
-            "start_time": gh_data["run"].get("updated_at")
-        }
+        dep_step = gh_data.get("deploy_step")
+        if dep_step:
+            latest_dep = {
+                "deployment_id": f"DEP-{run.get('id')}",
+                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+                "environment": "Production",
+                "deployed_by": "GitHub Actions",
+                "start_time": run.get("updated_at"),
+                "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
+            }
+
+    if not latest_pipe:
+        latest_pipe = database.get_latest_pipeline_run()
+
+    if not latest_dep:
+        latest_dep = database.get_latest_deployment()
 
     app_uptime_sec = int(time.time() - getattr(current_app, "start_time", time.time()))
 
@@ -165,27 +173,36 @@ def get_project_details(project_id):
     # Connect live probes
     db_status = database.get_db_status()
     git_meta = platform_service.get_git_metadata()
-    latest_dep = database.get_latest_deployment()
-    latest_pipe = database.get_latest_pipeline_run()
-    
     gh_data = platform_service.get_real_github_pipeline_data()
-    if not latest_pipe and gh_data:
+    latest_dep = None
+    latest_pipe = None
+
+    if gh_data and gh_data.get("run"):
+        run = gh_data["run"]
         latest_pipe = {
-            "run_id": str(gh_data["run"].get("id")),
-            "status": "PASSED" if gh_data["run"].get("conclusion") == "success" else "FAILED",
-            "branch": gh_data["run"].get("head_branch"),
-            "commit_hash": gh_data["run"].get("head_sha")[:7] if gh_data["run"].get("head_sha") else "",
-            "stages": gh_data["stages"]
+            "run_id": str(run.get("id")),
+            "status": "PASSED" if run.get("conclusion") == "success" else "FAILED",
+            "branch": run.get("head_branch"),
+            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+            "stages": gh_data.get("stages", [])
         }
     
-    if not latest_dep and gh_data and gh_data.get("deploy_step"):
-        dep_step = gh_data["deploy_step"]
-        latest_dep = {
-            "deployment_id": f"DEP-{gh_data['run'].get('id')}",
-            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
-            "environment": "Production",
-            "deployed_by": "GitHub Actions"
-        }
+        dep_step = gh_data.get("deploy_step")
+        if dep_step:
+            latest_dep = {
+                "deployment_id": f"DEP-{run.get('id')}",
+                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+                "environment": "Production",
+                "deployed_by": "GitHub Actions",
+                "start_time": run.get("updated_at"),
+                "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
+            }
+
+    if not latest_pipe:
+        latest_pipe = database.get_latest_pipeline_run()
+
+    if not latest_dep:
+        latest_dep = database.get_latest_deployment()
 
     trivy_data = platform_service.get_trivy_security_status()
 
@@ -226,19 +243,24 @@ def validate_project():
 def list_deployments():
     """Retrieve deployment records."""
     limit = int(request.args.get("limit", 20))
-    deps = database.get_deployments(limit=limit)
+    deps = []
+    gh_data = platform_service.get_real_github_pipeline_data()
+    
+    if gh_data and gh_data.get("run") and gh_data.get("deploy_step"):
+        run = gh_data["run"]
+        dep_step = gh_data["deploy_step"]
+        deps = [{
+            "deployment_id": f"DEP-{run.get('id')}",
+            "project_name": "cloud-devsecops-platform",
+            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+            "environment": "Production",
+            "deployed_by": "GitHub Actions",
+            "start_time": run.get("updated_at"),
+            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
+        }]
+        
     if not deps:
-        gh_data = platform_service.get_real_github_pipeline_data()
-        if gh_data and gh_data.get("deploy_step"):
-            dep_step = gh_data["deploy_step"]
-            deps = [{
-                "deployment_id": f"DEP-{gh_data['run'].get('id')}",
-                "project_name": "cloud-devsecops-platform",
-                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
-                "environment": "Production",
-                "deployed_by": "GitHub Actions",
-                "start_time": gh_data["run"].get("updated_at")
-            }]
+        deps = database.get_deployments(limit=limit)
     return jsonify({
         "status": "success",
         "total": len(deps),
@@ -286,20 +308,24 @@ def trigger_deployment():
 @platform_bp.route("/pipelines", methods=["GET"])
 def get_pipelines():
     """Retrieve CI/CD pipeline history and real 13-stage verification details."""
-    runs = database.get_pipeline_runs(limit=10)
-    stages = platform_service.get_pipeline_stages()
+    runs = []
+    gh_data = platform_service.get_real_github_pipeline_data()
     
+    if gh_data and gh_data.get("run"):
+        run = gh_data["run"]
+        runs = [{
+            "run_id": str(run.get("id")),
+            "status": "PASSED" if run.get("conclusion") == "success" else "FAILED",
+            "branch": run.get("head_branch"),
+            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+            "created_at": run.get("created_at"),
+            "stages": gh_data.get("stages", [])
+        }]
+        
     if not runs:
-        gh_data = platform_service.get_real_github_pipeline_data()
-        if gh_data:
-            runs = [{
-                "run_id": str(gh_data["run"].get("id")),
-                "status": "PASSED" if gh_data["run"].get("conclusion") == "success" else "FAILED",
-                "branch": gh_data["run"].get("head_branch"),
-                "commit_hash": gh_data["run"].get("head_sha")[:7] if gh_data["run"].get("head_sha") else "",
-                "created_at": gh_data["run"].get("created_at"),
-                "stages": gh_data["stages"]
-            }]
+        runs = database.get_pipeline_runs(limit=10)
+            
+    stages = platform_service.get_pipeline_stages()
             
     return jsonify({
         "status": "success",
@@ -516,20 +542,29 @@ def get_rollback_options():
     Grounds rollback in verified image tags and deployment history.
     Clearly identifies capability as architectural AWS SSM image tag rollback.
     """
-    deployments = database.get_deployments(limit=10)
+    db_deployments = database.get_deployments(limit=10)
+    gh_data = platform_service.get_real_github_pipeline_data()
     
-    if not deployments:
-        gh_data = platform_service.get_real_github_pipeline_data()
-        if gh_data and gh_data.get("deploy_step"):
-            dep_step = gh_data["deploy_step"]
-            deployments = [{
-                "deployment_id": f"DEP-{gh_data['run'].get('id')}",
-                "project_name": "cloud-devsecops-platform",
-                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
-                "environment": "Production",
-                "deployed_by": "GitHub Actions",
-                "start_time": gh_data["run"].get("updated_at")
-            }]
+    deployments = []
+    if gh_data and gh_data.get("run") and gh_data.get("deploy_step"):
+        run = gh_data["run"]
+        dep_step = gh_data["deploy_step"]
+        gh_dep = {
+            "deployment_id": f"DEP-{run.get('id')}",
+            "project_name": "cloud-devsecops-platform",
+            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+            "environment": "Production",
+            "deployed_by": "GitHub Actions",
+            "start_time": run.get("updated_at")
+        }
+        deployments.append(gh_dep)
+        
+        # Add database history that doesn't duplicate the GitHub run
+        for d in db_deployments:
+            if d.get("deployment_id") != gh_dep["deployment_id"]:
+                deployments.append(d)
+    else:
+        deployments = db_deployments
             
     current_dep = deployments[0] if deployments else None
 
