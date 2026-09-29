@@ -39,22 +39,41 @@ jobs:
         run: |
           python -m pytest
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
       - name: SonarQube analysis
         env:
           SONAR_HOST_URL: http://localhost:9000
         run: |
+          echo "Java environment:"
+          java -version
+
           echo "Waiting for SonarQube to start..."
           until curl -s http://localhost:9000/api/system/status | grep -q '"status":"UP"'; do
             sleep 5
           done
           echo "SonarQube is up!"
 
-          curl -s -u admin:admin -X POST "http://localhost:9000/api/users/change_password?login=admin&previousPassword=admin&password=admin123"
-          TOKEN=$(curl -s -u admin:admin123 -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-token" | jq -r .token)
+          ADMIN_PASSWORD="EphemeralAdminPass_${RANDOM}_$(openssl rand -hex 8)"
+          echo "::add-mask::$ADMIN_PASSWORD"
 
-          export SONAR_SCANNER_VERSION=5.0.1.3006
-          export SONAR_SCANNER_HOME=$HOME/.sonar/sonar-scanner-$SONAR_SCANNER_VERSION-linux
-          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SONAR_SCANNER_VERSION-linux.zip
+          curl -s -u admin:admin -X POST "http://localhost:9000/api/users/change_password?login=admin&previousPassword=admin&password=${ADMIN_PASSWORD}"
+
+          TOKEN=$(curl -s -u "admin:${ADMIN_PASSWORD}" -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-token-${RANDOM}" | jq -r .token)
+          echo "::add-mask::$TOKEN"
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to generate SonarQube analysis token"
+            exit 1
+          fi
+
+          export SONAR_SCANNER_VERSION=7.0.2.4839
+          export SONAR_SCANNER_HOME=$HOME/.sonar/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64
+          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SONAR_SCANNER_VERSION-linux-x64.zip
           unzip -q sonar-scanner.zip -d $HOME/.sonar/
           export PATH=$SONAR_SCANNER_HOME/bin:$PATH
 
@@ -63,7 +82,7 @@ jobs:
             -Dsonar.sources=app \
             -Dsonar.tests=tests \
             -Dsonar.host.url=http://localhost:9000 \
-            -Dsonar.token=$TOKEN
+            -Dsonar.token="$TOKEN"
 
       - name: Run Trivy filesystem scan
         run: |
