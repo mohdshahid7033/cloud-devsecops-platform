@@ -189,13 +189,20 @@ def get_project_details(project_id):
     
         dep_step = gh_data.get("deploy_step")
         if dep_step:
+            dur_sec = 0
+            if dep_step.get("duration"):
+                try:
+                    dur_sec = int(dep_step["duration"].replace("s", ""))
+                except Exception:
+                    pass
             latest_dep = {
                 "deployment_id": f"DEP-{run.get('id')}",
                 "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
                 "environment": "Production",
                 "deployed_by": "GitHub Actions",
                 "start_time": run.get("updated_at"),
-                "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
+                "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+                "duration_seconds": dur_sec
             }
 
     if not latest_pipe:
@@ -249,6 +256,12 @@ def list_deployments():
     if gh_data and gh_data.get("run") and gh_data.get("deploy_step"):
         run = gh_data["run"]
         dep_step = gh_data["deploy_step"]
+        dur_sec = 0
+        if dep_step.get("duration"):
+            try:
+                dur_sec = int(dep_step["duration"].replace("s", ""))
+            except Exception:
+                pass
         deps = [{
             "deployment_id": f"DEP-{run.get('id')}",
             "project_name": "cloud-devsecops-platform",
@@ -256,7 +269,8 @@ def list_deployments():
             "environment": "Production",
             "deployed_by": "GitHub Actions",
             "start_time": run.get("updated_at"),
-            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
+            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+            "duration_seconds": dur_sec
         }]
         
     if not deps:

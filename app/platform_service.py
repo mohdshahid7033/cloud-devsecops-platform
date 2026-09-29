@@ -118,6 +118,18 @@ def get_git_metadata():
     except Exception:
         pass
 
+    # Dynamic fallback to GitHub Actions telemetry
+    gh_data = get_real_github_pipeline_data()
+    if gh_data and gh_data.get("run"):
+        run = gh_data["run"]
+        if meta["commit_hash"] == "bf6b812" and run.get("head_sha"):
+            meta["commit_hash"] = str(run["head_sha"])[:7]
+        if meta["branch"] == "main" and run.get("head_branch"):
+            meta["branch"] = run["head_branch"]
+        commit_msg = run.get("head_commit", {}).get("message")
+        if meta["commit_message"] == "Update demo heading for CI/CD deployment" and commit_msg:
+            meta["commit_message"] = commit_msg.split("\n")[0]
+
     return meta
 
 
