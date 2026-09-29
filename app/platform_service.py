@@ -1092,8 +1092,8 @@ def get_real_github_pipeline_data():
     """Fetch pipeline data from real GitHub Actions run API with caching."""
     global _github_cache
     
-    # Return cached data if younger than 60 seconds
-    if _github_cache["data"] and time.time() - _github_cache["last_fetched"] < 60:
+    # Return cached data if younger than 120 seconds
+    if _github_cache["data"] and time.time() - _github_cache["last_fetched"] < 120:
         return _github_cache["data"]
 
     token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
@@ -1125,89 +1125,87 @@ def get_real_github_pipeline_data():
             jobs_data = json.loads(resp.read().decode())
         
         jobs = jobs_data.get("jobs", [])
-        if not jobs:
-            return None
-        
-        # Test job should contain the 13 steps
-        test_job = jobs[0]
         stages = []
-        for step in test_job.get("steps", []):
-            name = step.get("name")
-            OFFICIAL_STAGES = {
-                "Checkout code",
-                "Check Python",
-                "Install dependencies",
-                "Run tests",
-                "SonarQube analysis",
-                "Run Trivy filesystem scan",
-                "Build Docker image",
-                "Scan Docker image with Trivy",
-                "Configure AWS credentials",
-                "Login to Amazon ECR",
-                "Push Docker image to ECR",
-                "Deploy to EC2 via SSM",
-                "Application health check"
-            }
-            if name not in OFFICIAL_STAGES:
-                continue
-            
-            gh_status = step.get("status")
-            gh_conclusion = step.get("conclusion")
-            
-            dashboard_status = "PENDING"
-            if gh_status == "queued":
+        if jobs:
+            # Test job should contain the 13 steps
+            test_job = jobs[0]
+            for step in test_job.get("steps", []):
+                name = step.get("name")
+                OFFICIAL_STAGES = {
+                    "Checkout code",
+                    "Check Python",
+                    "Install dependencies",
+                    "Run tests",
+                    "SonarQube analysis",
+                    "Run Trivy filesystem scan",
+                    "Build Docker image",
+                    "Scan Docker image with Trivy",
+                    "Configure AWS credentials",
+                    "Login to Amazon ECR",
+                    "Push Docker image to ECR",
+                    "Deploy to EC2 via SSM",
+                    "Application health check"
+                }
+                if name not in OFFICIAL_STAGES:
+                    continue
+                
+                gh_status = step.get("status")
+                gh_conclusion = step.get("conclusion")
+                
                 dashboard_status = "PENDING"
-            elif gh_status == "in_progress":
-                dashboard_status = "RUNNING"
-            elif gh_status == "completed":
-                if gh_conclusion == "success":
-                    dashboard_status = "PASSED"
-                elif gh_conclusion == "failure":
-                    dashboard_status = "FAILED"
-                elif gh_conclusion == "skipped":
-                    dashboard_status = "SKIPPED"
-                elif gh_conclusion == "cancelled":
-                    dashboard_status = "CANCELLED"
-                else:
-                    dashboard_status = "PASSED"
-                    
-            started_at = step.get("started_at")
-            completed_at = step.get("completed_at")
-            duration_str = "0s"
-            if started_at and completed_at:
-                try:
-                    s_t = datetime.strptime(started_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
-                    c_t = datetime.strptime(completed_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
-                    dur_sec = int((c_t - s_t).total_seconds())
-                    duration_str = f"{dur_sec}s"
-                except Exception:
-                    pass
-            
-            id_mapping = {
-                "Checkout code": "checkout",
-                "Check Python": "python-check",
-                "Install dependencies": "deps",
-                "Run tests": "pytest",
-                "SonarQube analysis": "sonarqube",
-                "Run Trivy filesystem scan": "trivy-fs",
-                "Build Docker image": "docker-build",
-                "Scan Docker image with Trivy": "trivy-image",
-                "Configure AWS credentials": "aws-config",
-                "Login to Amazon ECR": "ecr-login",
-                "Push Docker image to ECR": "ecr-push",
-                "Deploy to EC2 via SSM": "ssm-deploy",
-                "Application health check": "health-check"
-            }
-            
-            stages.append({
-                "id": id_mapping.get(name, name.lower().replace(" ", "-").replace("(", "").replace(")", "")),
-                "name": name,
-                "status": dashboard_status,
-                "duration": duration_str,
-                "command": "GitHub Actions Step"
-            })
-            
-        data = {
+                if gh_status == "queued":
+                    dashboard_status = "PENDING"
+                elif gh_status == "in_progress":
+                    dashboard_status = "RUNNING"
+                elif gh_status == "completed":
+                    if gh_conclusion == "success":
+                        dashboard_status = "PASSED"
+                    elif gh_conclusion == "failure":
+                        dashboard_status = "FAILED"
+                    elif gh_conclusion == "skipped":
+                        dashboard_status = "SKIPPED"
+                    elif gh_conclusion == "cancelled":
+                        dashboard_status = "CANCELLED"
+                    else:
+                        dashboard_status = "PASSED"
+                        
+                started_at = step.get("started_at")
+                completed_at = step.get("completed_at")
+                duration_str = "0s"
+                if started_at and completed_at:
+                    try:
+                        s_t = datetime.strptime(started_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
+                        c_t = datetime.strptime(completed_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
+                        dur_sec = int((c_t - s_t).total_seconds())
+                        duration_str = f"{dur_sec}s"
+                    except Exception:
+                        pass
+                
+                id_mapping = {
+                    "Checkout code": "checkout",
+                    "Check Python": "python-check",
+                    "Install dependencies": "deps",
+                    "Run tests": "pytest",
+                    "SonarQube analysis": "sonarqube",
+                    "Run Trivy filesystem scan": "trivy-fs",
+                    "Build Docker image": "docker-build",
+                    "Scan Docker image with Trivy": "trivy-image",
+                    "Configure AWS credentials": "aws-config",
+                    "Login to Amazon ECR": "ecr-login",
+                    "Push Docker image to ECR": "ecr-push",
+                    "Deploy to EC2 via SSM": "ssm-deploy",
+                    "Application health check": "health-check"
+                }
+                
+                stages.append({
+                    "id": id_mapping.get(name, name.lower().replace(" ", "-").replace("(", "").replace(")", "")),
+                    "name": name,
+                    "status": dashboard_status,
+                    "duration": duration_str,
+                    "command": "GitHub Actions Step"
+                })
+                
+            data = {
             "stages": stages,
             "run": latest_run,
             "trivy_step": next((s for s in stages if "trivy image" in s["name"].lower() or "trivy filesystem" in s["name"].lower()), None),
@@ -1218,11 +1216,14 @@ def get_real_github_pipeline_data():
         return data
     except urllib.error.HTTPError as e:
         logger.error(f"GitHub API HTTP error: {e.code} - {e.reason}")
+        if e.code == 403:
+            _github_cache["last_fetched"] = time.time()  # Backoff for the cache duration
         if _github_cache["data"]:
             return _github_cache["data"]
         return None
     except Exception as e:
         logger.error(f"Failed to fetch GitHub pipeline stages: {e}")
+        _github_cache["last_fetched"] = time.time()  # Backoff
         if _github_cache["data"]:
             return _github_cache["data"]
         return None

@@ -61,7 +61,7 @@ def get_overview():
             "status": pipe_status,
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
-            "stages": gh_data.get("stages", []),
+            "stages": platform_service.get_pipeline_stages(),
             "created_at": run.get("created_at")
         }
     
@@ -204,7 +204,7 @@ def get_project_details(project_id):
             "status": pipe_status,
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
-            "stages": gh_data.get("stages", [])
+            "stages": platform_service.get_pipeline_stages()
         }
     
         dep_step = gh_data.get("deploy_step")
@@ -363,7 +363,7 @@ def get_pipelines():
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
             "created_at": run.get("created_at"),
-            "stages": gh_data.get("stages", [])
+            "stages": platform_service.get_pipeline_stages()
         }]
         
     if not runs:
