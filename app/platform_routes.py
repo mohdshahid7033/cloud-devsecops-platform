@@ -46,9 +46,19 @@ def get_overview():
 
     if gh_data and gh_data.get("run"):
         run = gh_data["run"]
+        gh_run_status = run.get("status")
+        if gh_run_status == "queued":
+            pipe_status = "PENDING"
+        elif gh_run_status == "in_progress":
+            pipe_status = "RUNNING"
+        elif gh_run_status == "completed":
+            pipe_status = "PASSED" if run.get("conclusion") == "success" else "FAILED"
+        else:
+            pipe_status = "PENDING"
+
         latest_pipe = {
             "run_id": str(run.get("id")),
-            "status": "PASSED" if run.get("conclusion") == "success" else "FAILED",
+            "status": pipe_status,
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
             "stages": gh_data.get("stages", []),
@@ -179,9 +189,19 @@ def get_project_details(project_id):
 
     if gh_data and gh_data.get("run"):
         run = gh_data["run"]
+        gh_run_status = run.get("status")
+        if gh_run_status == "queued":
+            pipe_status = "PENDING"
+        elif gh_run_status == "in_progress":
+            pipe_status = "RUNNING"
+        elif gh_run_status == "completed":
+            pipe_status = "PASSED" if run.get("conclusion") == "success" else "FAILED"
+        else:
+            pipe_status = "PENDING"
+
         latest_pipe = {
             "run_id": str(run.get("id")),
-            "status": "PASSED" if run.get("conclusion") == "success" else "FAILED",
+            "status": pipe_status,
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
             "stages": gh_data.get("stages", [])
@@ -327,9 +347,19 @@ def get_pipelines():
     
     if gh_data and gh_data.get("run"):
         run = gh_data["run"]
+        gh_run_status = run.get("status")
+        if gh_run_status == "queued":
+            pipe_status = "PENDING"
+        elif gh_run_status == "in_progress":
+            pipe_status = "RUNNING"
+        elif gh_run_status == "completed":
+            pipe_status = "PASSED" if run.get("conclusion") == "success" else "FAILED"
+        else:
+            pipe_status = "PENDING"
+
         runs = [{
             "run_id": str(run.get("id")),
-            "status": "PASSED" if run.get("conclusion") == "success" else "FAILED",
+            "status": pipe_status,
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
             "created_at": run.get("created_at"),

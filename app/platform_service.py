@@ -1207,18 +1207,15 @@ def get_real_github_pipeline_data():
                 "command": "GitHub Actions Step"
             })
             
-        if stages:
-            data = {
-                "stages": stages,
-                "run": latest_run,
-                "trivy_step": next((s for s in stages if "trivy image" in s["name"].lower() or "trivy filesystem" in s["name"].lower()), None),
-                "deploy_step": next((s for s in stages if "deploy to ec2" in s["name"].lower()), None)
-            }
-            _github_cache["data"] = data
-            _github_cache["last_fetched"] = time.time()
-            return data
-            
-        return None
+        data = {
+            "stages": stages,
+            "run": latest_run,
+            "trivy_step": next((s for s in stages if "trivy image" in s["name"].lower() or "trivy filesystem" in s["name"].lower()), None),
+            "deploy_step": next((s for s in stages if "deploy to ec2" in s["name"].lower()), None)
+        }
+        _github_cache["data"] = data
+        _github_cache["last_fetched"] = time.time()
+        return data
     except urllib.error.HTTPError as e:
         logger.error(f"GitHub API HTTP error: {e.code} - {e.reason}")
         if _github_cache["data"]:
@@ -1236,37 +1233,50 @@ def get_pipeline_stages():
     Return the verification stages mapped directly to GitHub Actions CI/CD workflow (.github/workflows/ci.yml).
     Prefers the verified CI/CD workflow run record from the actual GitHub Actions API if token is present.
     """
-    github_data = get_real_github_pipeline_data()
-    stages = github_data["stages"] if github_data else None
+    default_stages = [
+        {"id": "checkout", "name": "Checkout code", "status": "PENDING", "duration": "0s", "command": "actions/checkout@v4"},
+        {"id": "python-check", "name": "Check Python", "status": "PENDING", "duration": "0s", "command": "python --version; pip --version"},
+        {"id": "deps", "name": "Install dependencies", "status": "PENDING", "duration": "0s", "command": "pip install -r app/requirements.txt pytest awscli"},
+        {"id": "pytest", "name": "Run tests", "status": "PENDING", "duration": "0s", "command": "pytest"},
+        {"id": "sonarqube", "name": "SonarQube analysis", "status": "PENDING", "duration": "0s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
+        {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "PENDING", "duration": "0s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
+        {"id": "docker-build", "name": "Build Docker image", "status": "PENDING", "duration": "0s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
+        {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "PENDING", "duration": "0s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
+        {"id": "aws-config", "name": "Configure AWS credentials", "status": "PENDING", "duration": "0s", "command": "aws-actions/configure-aws-credentials@v4"},
+        {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "PENDING", "duration": "0s", "command": "aws-actions/amazon-ecr-login@v2"},
+        {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "PENDING", "duration": "0s", "command": "docker push"},
+        {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "PENDING", "duration": "0s", "command": "aws ssm send-command"},
+        {"id": "health-check", "name": "Application health check", "status": "PENDING", "duration": "0s", "command": "curl -f http://localhost/health"}
+    ]
 
-    if not stages:
+    github_data = get_real_github_pipeline_data()
+    stages = []
+
+    if github_data:
+        stages = default_stages
+        gh_stages = github_data.get("stages", [])
+        if gh_stages:
+            for default_st in stages:
+                match = next((s for s in gh_stages if s["name"] == default_st["name"]), None)
+                if match:
+                    default_st["status"] = match["status"]
+                    default_st["duration"] = match["duration"]
+                    if match.get("id"):
+                        default_st["id"] = match["id"]
+    else:
+        found_db_stages = None
         runs = database.get_pipeline_runs(limit=10)
         for r in runs:
             if r.get("duration_seconds", 0) > 60 and r.get("stages"):
-                stages = [dict(s) for s in r["stages"]]
+                found_db_stages = [dict(s) for s in r["stages"]]
                 break
-    
-    if not stages:
-        latest_run = database.get_latest_pipeline_run()
-        if latest_run and latest_run.get("stages"):
-            stages = [dict(s) for s in latest_run["stages"]]
-            
-    if not stages:
-        stages = [
-            {"id": "checkout", "name": "Checkout code", "status": "PENDING", "duration": "0s", "command": "actions/checkout@v4"},
-            {"id": "python-check", "name": "Check Python", "status": "PENDING", "duration": "0s", "command": "python --version; pip --version"},
-            {"id": "deps", "name": "Install dependencies", "status": "PENDING", "duration": "0s", "command": "pip install -r app/requirements.txt pytest awscli"},
-            {"id": "pytest", "name": "Run tests", "status": "PENDING", "duration": "0s", "command": "pytest"},
-            {"id": "sonarqube", "name": "SonarQube analysis", "status": "PENDING", "duration": "0s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
-            {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "PENDING", "duration": "0s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
-            {"id": "docker-build", "name": "Build Docker image", "status": "PENDING", "duration": "0s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
-            {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "PENDING", "duration": "0s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
-            {"id": "aws-config", "name": "Configure AWS credentials", "status": "PENDING", "duration": "0s", "command": "aws-actions/configure-aws-credentials@v4"},
-            {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "PENDING", "duration": "0s", "command": "aws-actions/amazon-ecr-login@v2"},
-            {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "PENDING", "duration": "0s", "command": "docker push"},
-            {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "PENDING", "duration": "0s", "command": "aws ssm send-command"},
-            {"id": "health-check", "name": "Application health check", "status": "PENDING", "duration": "0s", "command": "curl -f http://localhost/health"}
-        ]
+        
+        if not found_db_stages:
+            latest_run = database.get_latest_pipeline_run()
+            if latest_run and latest_run.get("stages"):
+                found_db_stages = [dict(s) for s in latest_run["stages"]]
+                
+        stages = found_db_stages if found_db_stages else default_stages
 
     for st in stages:
         if st.get("id") == "pytest" and "pytest" not in st.get("name", "").lower():
