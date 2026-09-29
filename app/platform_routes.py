@@ -43,6 +43,27 @@ def get_overview():
     latest_dep = database.get_latest_deployment()
     latest_pipe = database.get_latest_pipeline_run()
 
+    gh_data = platform_service.get_real_github_pipeline_data()
+    if not latest_pipe and gh_data:
+        latest_pipe = {
+            "run_id": str(gh_data["run"].get("id")),
+            "status": "PASSED" if gh_data["run"].get("conclusion") == "success" else "FAILED",
+            "branch": gh_data["run"].get("head_branch"),
+            "commit_hash": gh_data["run"].get("head_sha")[:7] if gh_data["run"].get("head_sha") else "",
+            "stages": gh_data["stages"],
+            "created_at": gh_data["run"].get("created_at")
+        }
+    
+    if not latest_dep and gh_data and gh_data.get("deploy_step"):
+        dep_step = gh_data["deploy_step"]
+        latest_dep = {
+            "deployment_id": f"DEP-{gh_data['run'].get('id')}",
+            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+            "environment": "Production",
+            "deployed_by": "GitHub Actions",
+            "start_time": gh_data["run"].get("updated_at")
+        }
+
     app_uptime_sec = int(time.time() - getattr(current_app, "start_time", time.time()))
 
     return jsonify({
@@ -54,16 +75,16 @@ def get_overview():
             "total_projects": len(projects),
             "latest_deployment": latest_dep,
             "deployment_status": "Healthy / Live" if latest_dep and latest_dep.get("status") == "SUCCESS" else "Pending",
-            "pipeline_status": latest_pipe.get("status", "PASSED") if latest_pipe else "PASSED",
+            "pipeline_status": latest_pipe.get("status", "PENDING") if latest_pipe else "PENDING",
             "latest_pipeline_run": latest_pipe,
             "security_summary": {
-                "status": "PASSED (Gate Verified)" if trivy_data.get("status") == "PASSED" else "NO DATA",
+                "status": trivy_data.get("status", "NO DATA") if trivy_data.get("status") != "NO DATA" else "NO DATA",
                 "critical": trivy_data.get("critical_vulnerabilities"),
                 "high": trivy_data.get("high_vulnerabilities"),
                 "medium": trivy_data.get("medium_vulnerabilities"),
                 "low": trivy_data.get("low_vulnerabilities"),
                 "ignored_cves_count": len(trivy_data.get("ignored_cves", [])),
-                "statement": trivy_data.get("summary_statement", "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan")
+                "statement": trivy_data.get("summary_statement", "No vulnerability data available")
             },
             "application_health": {
                 "status": "healthy",
@@ -146,6 +167,26 @@ def get_project_details(project_id):
     git_meta = platform_service.get_git_metadata()
     latest_dep = database.get_latest_deployment()
     latest_pipe = database.get_latest_pipeline_run()
+    
+    gh_data = platform_service.get_real_github_pipeline_data()
+    if not latest_pipe and gh_data:
+        latest_pipe = {
+            "run_id": str(gh_data["run"].get("id")),
+            "status": "PASSED" if gh_data["run"].get("conclusion") == "success" else "FAILED",
+            "branch": gh_data["run"].get("head_branch"),
+            "commit_hash": gh_data["run"].get("head_sha")[:7] if gh_data["run"].get("head_sha") else "",
+            "stages": gh_data["stages"]
+        }
+    
+    if not latest_dep and gh_data and gh_data.get("deploy_step"):
+        dep_step = gh_data["deploy_step"]
+        latest_dep = {
+            "deployment_id": f"DEP-{gh_data['run'].get('id')}",
+            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+            "environment": "Production",
+            "deployed_by": "GitHub Actions"
+        }
+
     trivy_data = platform_service.get_trivy_security_status()
 
     return jsonify({
@@ -186,6 +227,18 @@ def list_deployments():
     """Retrieve deployment records."""
     limit = int(request.args.get("limit", 20))
     deps = database.get_deployments(limit=limit)
+    if not deps:
+        gh_data = platform_service.get_real_github_pipeline_data()
+        if gh_data and gh_data.get("deploy_step"):
+            dep_step = gh_data["deploy_step"]
+            deps = [{
+                "deployment_id": f"DEP-{gh_data['run'].get('id')}",
+                "project_name": "cloud-devsecops-platform",
+                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+                "environment": "Production",
+                "deployed_by": "GitHub Actions",
+                "start_time": gh_data["run"].get("updated_at")
+            }]
     return jsonify({
         "status": "success",
         "total": len(deps),
@@ -235,6 +288,19 @@ def get_pipelines():
     """Retrieve CI/CD pipeline history and real 13-stage verification details."""
     runs = database.get_pipeline_runs(limit=10)
     stages = platform_service.get_pipeline_stages()
+    
+    if not runs:
+        gh_data = platform_service.get_real_github_pipeline_data()
+        if gh_data:
+            runs = [{
+                "run_id": str(gh_data["run"].get("id")),
+                "status": "PASSED" if gh_data["run"].get("conclusion") == "success" else "FAILED",
+                "branch": gh_data["run"].get("head_branch"),
+                "commit_hash": gh_data["run"].get("head_sha")[:7] if gh_data["run"].get("head_sha") else "",
+                "created_at": gh_data["run"].get("created_at"),
+                "stages": gh_data["stages"]
+            }]
+            
     return jsonify({
         "status": "success",
         "total": len(runs),
@@ -319,20 +385,34 @@ def get_security():
     trivy_data = platform_service.get_trivy_security_status()
     sonar_data = platform_service.get_sonarqube_status()
     scans_history = database.get_security_scans(limit=5)
+    
+    if not scans_history and trivy_data.get("has_data"):
+        scans_history = [{
+            "scan_id": "SCAN-GH",
+            "project_name": "cloud-devsecops-platform",
+            "scanner": "trivy",
+            "scan_type": "fs",
+            "status": trivy_data.get("status"),
+            "critical_count": trivy_data.get("critical_vulnerabilities", 0),
+            "high_count": trivy_data.get("high_vulnerabilities", 0),
+            "medium_count": trivy_data.get("medium_vulnerabilities", 0),
+            "low_count": trivy_data.get("low_vulnerabilities", 0),
+            "scan_time": trivy_data.get("last_scan_time")
+        }]
 
     return jsonify({
         "status": "success",
         "latest_scan_time": trivy_data.get("last_scan_time"),
-        "code_quality_status": sonar_data.get("quality_gate") or "PASSED (CI Gate Verified)",
-        "security_status": "Clean (0 Critical/High CVEs)" if trivy_data.get("status") == "PASSED" else "Scan required",
-        "maintainability": "Grade A (SonarQube Verified)",
+        "code_quality_status": sonar_data.get("quality_gate") or "UNAVAILABLE",
+        "security_status": "Clean (0 Critical/High CVEs)" if trivy_data.get("status") == "PASSED" else trivy_data.get("status", "UNAVAILABLE"),
+        "maintainability": sonar_data.get("measures", {}).get("maintainability_rating") or "UNAVAILABLE",
         "vulnerabilities": {
             "critical": trivy_data.get("critical_vulnerabilities"),
             "high": trivy_data.get("high_vulnerabilities"),
             "medium": trivy_data.get("medium_vulnerabilities"),
             "low": trivy_data.get("low_vulnerabilities"),
-            "summary_statement": trivy_data.get("summary_statement", "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan"),
-            "has_data": trivy_data.get("has_data", True)
+            "summary_statement": trivy_data.get("summary_statement", "No vulnerability data available"),
+            "has_data": trivy_data.get("has_data", False)
         },
         "trivy": trivy_data,
         "sonarqube": sonar_data,
@@ -437,6 +517,20 @@ def get_rollback_options():
     Clearly identifies capability as architectural AWS SSM image tag rollback.
     """
     deployments = database.get_deployments(limit=10)
+    
+    if not deployments:
+        gh_data = platform_service.get_real_github_pipeline_data()
+        if gh_data and gh_data.get("deploy_step"):
+            dep_step = gh_data["deploy_step"]
+            deployments = [{
+                "deployment_id": f"DEP-{gh_data['run'].get('id')}",
+                "project_name": "cloud-devsecops-platform",
+                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+                "environment": "Production",
+                "deployed_by": "GitHub Actions",
+                "start_time": gh_data["run"].get("updated_at")
+            }]
+            
     current_dep = deployments[0] if deployments else None
 
     rollback_targets = [

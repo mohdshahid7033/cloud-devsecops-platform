@@ -610,8 +610,7 @@ def get_projects():
                         if "updated_at" in row and row["updated_at"]:
                             row["updated_at"] = str(row["updated_at"])
                     record_success()
-                    if rows:
-                        return rows
+                    return rows
             finally:
                 conn.close()
         except Exception:
@@ -719,8 +718,7 @@ def get_deployments(limit=20):
                         if "created_at" in row and row["created_at"]:
                             row["created_at"] = str(row["created_at"])
                     record_success()
-                    if rows:
-                        return rows
+                    return rows
             finally:
                 conn.close()
         except Exception:
@@ -816,8 +814,7 @@ def get_pipeline_runs(limit=10):
                             except Exception:
                                 row["stages"] = []
                     record_success()
-                    if rows:
-                        return rows
+                    return rows
             finally:
                 conn.close()
         except Exception:
@@ -910,8 +907,7 @@ def get_security_scans(limit=10):
                             except Exception:
                                 row["details"] = {}
                     record_success()
-                    if rows:
-                        return rows
+                    return rows
             finally:
                 conn.close()
         except Exception:

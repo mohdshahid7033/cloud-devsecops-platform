@@ -183,6 +183,7 @@ async function loadOverview(showLoading = false) {
     renderOverview(data);
   } catch (err) {
     console.error('Error loading overview:', err);
+    showToast('Telemetry sync failed: ' + err.message, 'error');
   }
 }
 
@@ -286,6 +287,7 @@ async function loadProjects() {
     `).join('');
   } catch (err) {
     console.error('Error loading projects:', err);
+    showToast('Failed to load projects: ' + err.message, 'error');
   }
 }
 
@@ -435,6 +437,7 @@ async function loadDeployments() {
     `).join('');
   } catch (err) {
     console.error('Error loading deployments:', err);
+    showToast('Failed to load deployments: ' + err.message, 'error');
   }
 }
 
@@ -608,6 +611,7 @@ async function loadPipelines() {
     }
   } catch (err) {
     console.error('Error loading pipelines:', err);
+    showToast('Failed to load CI/CD pipeline data: ' + err.message, 'error');
   }
 }
 
@@ -755,6 +759,7 @@ async function loadSecurity() {
     }
   } catch (err) {
     console.error('Error loading security telemetry:', err);
+    showToast('Failed to load security analysis: ' + err.message, 'error');
   }
 }
 
@@ -854,6 +859,7 @@ async function loadMonitoring(showLoading = false) {
     }
   } catch (err) {
     console.error('Error loading monitoring data:', err);
+    showToast('Failed to load live monitoring telemetry: ' + err.message, 'error');
   }
 }
 
@@ -939,6 +945,7 @@ async function loadInfrastructure() {
     }
   } catch (err) {
     console.error('Error loading infrastructure:', err);
+    showToast('Failed to load infrastructure data: ' + err.message, 'error');
   }
 }
 

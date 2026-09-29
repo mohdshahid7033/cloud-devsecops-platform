@@ -7,6 +7,7 @@ import logging
 import subprocess
 import urllib.request
 import urllib.error
+from datetime import datetime
 
 try:
     import database
@@ -470,11 +471,33 @@ def get_trivy_security_status():
             }
         ]
 
-    # 3. Check for recorded scan in database
+    # 3. Check for recorded scan in database or GitHub Actions
     latest_scan = database.get_latest_security_scan()
-    has_data = latest_scan is not None
-
-    if has_data:
+    gh_data = get_real_github_pipeline_data()
+    
+    if gh_data and gh_data.get("trivy_step"):
+        gh_trivy = gh_data["trivy_step"]
+        has_data = True
+        if gh_trivy["status"] == "PASSED":
+            crit = 0
+            high = 0
+            med = 0
+            low = 0
+            scan_time = gh_data["run"].get("updated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
+            summary = "0 HIGH / CRITICAL vulnerabilities detected in the latest GitHub Actions scan"
+            status = "PASSED"
+        else:
+            crit = None
+            high = None
+            med = None
+            low = None
+            scan_time = gh_data["run"].get("updated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
+            summary = "Vulnerabilities detected. See GitHub Actions logs for details."
+            status = "WARNING"
+        scanner = "Aqua Security Trivy (GitHub Actions)"
+        target = "Container Filesystem"
+    elif latest_scan is not None:
+        has_data = True
         crit = latest_scan.get("critical_count", 0)
         high = latest_scan.get("high_count", 0)
         med = latest_scan.get("medium_count", 0)
@@ -484,9 +507,12 @@ def get_trivy_security_status():
         target = latest_scan.get("details", {}).get("target", "app/requirements.txt & Container Filesystem")
         if crit + high == 0:
             summary = "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
+            status = "PASSED"
         else:
             summary = f"{crit + high} HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
+            status = "WARNING"
     else:
+        has_data = False
         crit = None
         high = None
         med = None
@@ -495,13 +521,14 @@ def get_trivy_security_status():
         scanner = "Aqua Security Trivy"
         target = "app/requirements.txt"
         summary = "No scan result available."
+        status = "NO DATA"
 
     return {
         "has_data": has_data,
         "scanner": scanner,
         "cli_available": trivy_cmd is not None,
         "target": target,
-        "status": "PASSED" if (has_data and (crit or 0) + (high or 0) == 0) else ("WARNING" if has_data else "NO DATA"),
+        "status": status,
         "critical_vulnerabilities": crit,
         "high_vulnerabilities": high,
         "medium_vulnerabilities": med,
@@ -1043,36 +1070,175 @@ def run_diagnostics():
     }
 
 
+# Cache for GitHub pipeline stages to avoid rate limits
+_github_cache = {
+    "data": None,
+    "last_fetched": 0
+}
+
+def get_real_github_pipeline_data():
+    """Fetch pipeline data from real GitHub Actions run API with caching."""
+    global _github_cache
+    
+    # Return cached data if younger than 60 seconds
+    if _github_cache["data"] and time.time() - _github_cache["last_fetched"] < 60:
+        return _github_cache["data"]
+
+    token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
+    repo = "mohdshahid7033/cloud-devsecops-platform"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "DevSecOps-Platform"
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        url_runs = f"https://api.github.com/repos/{repo}/actions/runs?per_page=1"
+        req_runs = urllib.request.Request(url_runs, headers=headers)
+        with urllib.request.urlopen(req_runs, timeout=5) as resp:
+            runs_data = json.loads(resp.read().decode())
+        
+        runs = runs_data.get("workflow_runs", [])
+        if not runs:
+            return None
+        
+        latest_run = runs[0]
+        run_id = latest_run.get("id")
+
+        url_jobs = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
+        req_jobs = urllib.request.Request(url_jobs, headers=headers)
+        with urllib.request.urlopen(req_jobs, timeout=5) as resp:
+            jobs_data = json.loads(resp.read().decode())
+        
+        jobs = jobs_data.get("jobs", [])
+        if not jobs:
+            return None
+        
+        # Test job should contain the 13 steps
+        test_job = jobs[0]
+        stages = []
+        for step in test_job.get("steps", []):
+            name = step.get("name")
+            if name in ["Set up job", "Complete job", "Post Checkout code", "Post Configure AWS credentials", "Post Login to Amazon ECR"]:
+                continue
+            
+            gh_status = step.get("status")
+            gh_conclusion = step.get("conclusion")
+            
+            dashboard_status = "PENDING"
+            if gh_status == "queued":
+                dashboard_status = "PENDING"
+            elif gh_status == "in_progress":
+                dashboard_status = "RUNNING"
+            elif gh_status == "completed":
+                if gh_conclusion == "success":
+                    dashboard_status = "PASSED"
+                elif gh_conclusion == "failure":
+                    dashboard_status = "FAILED"
+                elif gh_conclusion == "skipped":
+                    dashboard_status = "SKIPPED"
+                elif gh_conclusion == "cancelled":
+                    dashboard_status = "CANCELLED"
+                else:
+                    dashboard_status = "PASSED"
+                    
+            started_at = step.get("started_at")
+            completed_at = step.get("completed_at")
+            duration_str = "0s"
+            if started_at and completed_at:
+                try:
+                    s_t = datetime.strptime(started_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
+                    c_t = datetime.strptime(completed_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
+                    dur_sec = int((c_t - s_t).total_seconds())
+                    duration_str = f"{dur_sec}s"
+                except Exception:
+                    pass
+            
+            id_mapping = {
+                "Checkout code": "checkout",
+                "Check Python": "python-check",
+                "Install dependencies": "deps",
+                "Run tests": "pytest",
+                "SonarQube analysis": "sonarqube",
+                "Run Trivy filesystem scan": "trivy-fs",
+                "Build Docker image": "docker-build",
+                "Scan Docker image with Trivy": "trivy-image",
+                "Configure AWS credentials": "aws-config",
+                "Login to Amazon ECR": "ecr-login",
+                "Push Docker image to ECR": "ecr-push",
+                "Deploy to EC2 via SSM": "ssm-deploy",
+                "Application health check": "health-check"
+            }
+            
+            stages.append({
+                "id": id_mapping.get(name, name.lower().replace(" ", "-").replace("(", "").replace(")", "")),
+                "name": name,
+                "status": dashboard_status,
+                "duration": duration_str,
+                "command": "GitHub Actions Step"
+            })
+            
+        if stages:
+            data = {
+                "stages": stages,
+                "run": latest_run,
+                "trivy_step": next((s for s in stages if "trivy image" in s["name"].lower() or "trivy filesystem" in s["name"].lower()), None),
+                "deploy_step": next((s for s in stages if "deploy to ec2" in s["name"].lower()), None)
+            }
+            _github_cache["data"] = data
+            _github_cache["last_fetched"] = time.time()
+            return data
+            
+        return None
+    except urllib.error.HTTPError as e:
+        logger.error(f"GitHub API HTTP error: {e.code} - {e.reason}")
+        if _github_cache["data"]:
+            return _github_cache["data"]
+        return None
+    except Exception as e:
+        logger.error(f"Failed to fetch GitHub pipeline stages: {e}")
+        if _github_cache["data"]:
+            return _github_cache["data"]
+        return None
+
+
 def get_pipeline_stages():
     """
-    Return the 13 verification stages mapped directly to GitHub Actions CI/CD workflow (.github/workflows/ci.yml).
-    Prefers the verified CI/CD workflow run record.
+    Return the verification stages mapped directly to GitHub Actions CI/CD workflow (.github/workflows/ci.yml).
+    Prefers the verified CI/CD workflow run record from the actual GitHub Actions API if token is present.
     """
-    stages = None
-    runs = database.get_pipeline_runs(limit=10)
-    for r in runs:
-        if r.get("duration_seconds", 0) > 60 and r.get("stages"):
-            stages = [dict(s) for s in r["stages"]]
-            break
+    github_data = get_real_github_pipeline_data()
+    stages = github_data["stages"] if github_data else None
+
+    if not stages:
+        runs = database.get_pipeline_runs(limit=10)
+        for r in runs:
+            if r.get("duration_seconds", 0) > 60 and r.get("stages"):
+                stages = [dict(s) for s in r["stages"]]
+                break
+    
     if not stages:
         latest_run = database.get_latest_pipeline_run()
         if latest_run and latest_run.get("stages"):
             stages = [dict(s) for s in latest_run["stages"]]
+            
     if not stages:
         stages = [
-            {"id": "checkout", "name": "Checkout code", "status": "PASSED", "duration": "3s", "command": "actions/checkout@v4"},
-            {"id": "python-check", "name": "Check Python & Runner", "status": "PASSED", "duration": "4s", "command": "python --version; pip --version"},
-            {"id": "deps", "name": "Install dependencies", "status": "PASSED", "duration": "18s", "command": "pip install -r app/requirements.txt pytest awscli"},
-            {"id": "pytest", "name": "Run unit tests (pytest)", "status": "PASSED", "duration": "6s", "command": "pytest (9/9 passed)"},
-            {"id": "sonarqube", "name": "SonarQube analysis", "status": "PASSED", "duration": "42s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
-            {"id": "trivy-fs", "name": "Trivy filesystem scan", "status": "PASSED", "duration": "14s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
-            {"id": "docker-build", "name": "Build Docker image", "status": "PASSED", "duration": "38s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
-            {"id": "trivy-image", "name": "Trivy image scan", "status": "PASSED", "duration": "22s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
-            {"id": "aws-config", "name": "Configure AWS credentials", "status": "PASSED", "duration": "2s", "command": "aws-actions/configure-aws-credentials@v4 (ap-south-1)"},
-            {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "PASSED", "duration": "4s", "command": "aws-actions/amazon-ecr-login@v2"},
-            {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "PASSED", "duration": "51s", "command": "docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest"},
-            {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "PASSED", "duration": "68s", "command": "aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe"},
-            {"id": "health-check", "name": "Application health check", "status": "PASSED", "duration": "5s", "command": "curl -f http://localhost/health (HTTP 200 OK)"}
+            {"id": "checkout", "name": "Checkout code", "status": "PENDING", "duration": "0s", "command": "actions/checkout@v4"},
+            {"id": "python-check", "name": "Check Python", "status": "PENDING", "duration": "0s", "command": "python --version; pip --version"},
+            {"id": "deps", "name": "Install dependencies", "status": "PENDING", "duration": "0s", "command": "pip install -r app/requirements.txt pytest awscli"},
+            {"id": "pytest", "name": "Run tests", "status": "PENDING", "duration": "0s", "command": "pytest"},
+            {"id": "sonarqube", "name": "SonarQube analysis", "status": "PENDING", "duration": "0s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
+            {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "PENDING", "duration": "0s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
+            {"id": "docker-build", "name": "Build Docker image", "status": "PENDING", "duration": "0s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
+            {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "PENDING", "duration": "0s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
+            {"id": "aws-config", "name": "Configure AWS credentials", "status": "PENDING", "duration": "0s", "command": "aws-actions/configure-aws-credentials@v4"},
+            {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "PENDING", "duration": "0s", "command": "aws-actions/amazon-ecr-login@v2"},
+            {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "PENDING", "duration": "0s", "command": "docker push"},
+            {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "PENDING", "duration": "0s", "command": "aws ssm send-command"},
+            {"id": "health-check", "name": "Application health check", "status": "PENDING", "duration": "0s", "command": "curl -f http://localhost/health"}
         ]
 
     for st in stages:
