@@ -484,16 +484,16 @@ def get_trivy_security_status():
             med = 0
             low = 0
             scan_time = gh_data["run"].get("updated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
-            summary = "0 HIGH / CRITICAL vulnerabilities detected in the latest GitHub Actions scan"
+            summary = "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
             status = "PASSED"
         else:
-            crit = None
-            high = None
-            med = None
-            low = None
+            crit = latest_scan.get("critical_count", 0) if latest_scan else 0
+            high = latest_scan.get("high_count", 0) if latest_scan else 0
+            med = latest_scan.get("medium_count", 0) if latest_scan else 0
+            low = latest_scan.get("low_count", 0) if latest_scan else 0
             scan_time = gh_data["run"].get("updated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
-            summary = "Vulnerabilities detected. See GitHub Actions logs for details."
-            status = "WARNING"
+            summary = f"{crit + high} HIGH / CRITICAL vulnerabilities detected in the latest configured scan" if (crit + high) > 0 else "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
+            status = "WARNING" if (crit + high) > 0 else gh_trivy.get("status", "WARNING")
         scanner = "Aqua Security Trivy (GitHub Actions)"
         target = "Container Filesystem"
     elif latest_scan is not None:
@@ -1121,7 +1121,22 @@ def get_real_github_pipeline_data():
         stages = []
         for step in test_job.get("steps", []):
             name = step.get("name")
-            if name in ["Set up job", "Complete job", "Post Checkout code", "Post Configure AWS credentials", "Post Login to Amazon ECR"]:
+            OFFICIAL_STAGES = {
+                "Checkout code",
+                "Check Python",
+                "Install dependencies",
+                "Run tests",
+                "SonarQube analysis",
+                "Run Trivy filesystem scan",
+                "Build Docker image",
+                "Scan Docker image with Trivy",
+                "Configure AWS credentials",
+                "Login to Amazon ECR",
+                "Push Docker image to ECR",
+                "Deploy to EC2 via SSM",
+                "Application health check"
+            }
+            if name not in OFFICIAL_STAGES:
                 continue
             
             gh_status = step.get("status")
