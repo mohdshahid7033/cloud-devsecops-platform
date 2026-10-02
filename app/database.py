@@ -80,35 +80,7 @@ def _seed_memory_stores():
             }
         ]
     if not _pipeline_store:
-        default_stages = [
-            {"id": "checkout", "name": "Checkout code", "status": "PASSED", "duration": "3s", "command": "actions/checkout@v4"},
-            {"id": "python-check", "name": "Check Python & Runner", "status": "PASSED", "duration": "4s", "command": "python --version; pip --version"},
-            {"id": "deps", "name": "Install dependencies", "status": "PASSED", "duration": "18s", "command": "pip install -r app/requirements.txt pytest awscli"},
-            {"id": "pytest", "name": "Run unit tests", "status": "PASSED", "duration": "6s", "command": "pytest (9/9 passed)"},
-            {"id": "sonarqube", "name": "SonarQube analysis", "status": "PASSED", "duration": "42s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
-            {"id": "trivy-fs", "name": "Trivy filesystem scan", "status": "PASSED", "duration": "14s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
-            {"id": "docker-build", "name": "Build Docker image", "status": "PASSED", "duration": "38s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
-            {"id": "trivy-image", "name": "Trivy image scan", "status": "PASSED", "duration": "22s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
-            {"id": "aws-config", "name": "Configure AWS credentials", "status": "PASSED", "duration": "2s", "command": "aws-actions/configure-aws-credentials@v4 (ap-south-1)"},
-            {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "PASSED", "duration": "4s", "command": "aws-actions/amazon-ecr-login@v2"},
-            {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "PASSED", "duration": "51s", "command": "docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest"},
-            {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "PASSED", "duration": "68s", "command": "aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe"},
-            {"id": "health-check", "name": "Application health check", "status": "PASSED", "duration": "5s", "command": "curl -f http://localhost/health (HTTP 200 OK)"}
-        ]
-        _pipeline_store = [
-            {
-                "id": 1,
-                "run_id": "RUN-202609-01",
-                "project_id": "proj-abc-demo",
-                "commit_hash": "bf6b812",
-                "branch": "main",
-                "status": "SUCCESS",
-                "stages_json": json.dumps(default_stages),
-                "triggered_by": "push: main",
-                "duration_seconds": 310,
-                "created_at": "2026-09-26 18:20:33"
-            }
-        ]
+        _pipeline_store = []
     if not _security_store:
         _security_store = [
             {

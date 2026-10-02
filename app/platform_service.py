@@ -416,9 +416,40 @@ def get_sonarqube_status():
             logger.debug(f"SonarQube measures query failed with token: {e}")
 
     if not result["authenticated"]:
-        result["quality_gate"] = "AUTHENTICATION_REQUIRED"
-        result["note"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
-        result["message"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
+        # Fallback to GitHub Actions CI state if no local token is available
+        gh_data = get_real_github_pipeline_data()
+        if gh_data and gh_data.get("stages"):
+            sonar_step_status = "UNKNOWN"
+            for step in gh_data["stages"]:
+                if "sonarqube" in step["name"].lower():
+                    sonar_step_status = step["status"]
+                    break
+
+            if sonar_step_status == "PASSED":
+                result["quality_gate"] = "PASSED"
+                result["authenticated"] = False
+                result["note"] = "Quality gate status derived from real GitHub Actions pipeline."
+                result["message"] = "SonarQube analysis passed in CI."
+            elif sonar_step_status == "FAILED":
+                result["quality_gate"] = "FAILED"
+                result["authenticated"] = False
+                result["note"] = "Quality gate status derived from real GitHub Actions pipeline."
+                result["message"] = "SonarQube analysis failed in CI."
+            elif sonar_step_status in ("PENDING", "RUNNING"):
+                result["quality_gate"] = "PENDING"
+                result["authenticated"] = False
+                result["note"] = f"SonarQube analysis is currently {sonar_step_status.lower()} in CI."
+                result["message"] = f"SonarQube analysis is {sonar_step_status.lower()}."
+            else:
+                result["quality_gate"] = "AUTHENTICATION_REQUIRED"
+                result["authenticated"] = False
+                result["note"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
+                result["message"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
+        else:
+            result["quality_gate"] = "AUTHENTICATION_REQUIRED"
+            result["authenticated"] = False
+            result["note"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
+            result["message"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
 
     return result
 
@@ -469,24 +500,12 @@ def get_trivy_security_status():
             except Exception:
                 pass
 
-    if not ignored_cves:
-        ignored_cves = [
-            {
-                "cve_id": "GHSA-6v7p-g79w-8964",
-                "policy": "Ignored by project policy",
-                "rationale": "Present in configured ignore list (.trivyignore)"
-            },
-            {
-                "cve_id": "CVE-2025-47273",
-                "policy": "Ignored by project policy",
-                "rationale": "Present in configured ignore list (.trivyignore)"
-            }
-        ]
+
 
     # 3. Check for recorded scan in database or GitHub Actions
     latest_scan = database.get_latest_security_scan()
     gh_data = get_real_github_pipeline_data()
-    
+
     if gh_data and gh_data.get("trivy_step"):
         gh_trivy = gh_data["trivy_step"]
         has_data = True
@@ -499,13 +518,18 @@ def get_trivy_security_status():
             summary = "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
             status = "PASSED"
         else:
-            crit = latest_scan.get("critical_count", 0) if latest_scan else 0
-            high = latest_scan.get("high_count", 0) if latest_scan else 0
-            med = latest_scan.get("medium_count", 0) if latest_scan else 0
-            low = latest_scan.get("low_count", 0) if latest_scan else 0
+            crit = latest_scan.get("critical_count", "?") if latest_scan else "?"
+            high = latest_scan.get("high_count", "?") if latest_scan else "?"
+            med = latest_scan.get("medium_count", "?") if latest_scan else "?"
+            low = latest_scan.get("low_count", "?") if latest_scan else "?"
             scan_time = gh_data["run"].get("updated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
-            summary = f"{crit + high} HIGH / CRITICAL vulnerabilities detected in the latest configured scan" if (crit + high) > 0 else "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
-            status = "WARNING" if (crit + high) > 0 else gh_trivy.get("status", "WARNING")
+
+            if latest_scan and (latest_scan.get("critical_count", 0) + latest_scan.get("high_count", 0)) > 0:
+                summary = f"{latest_scan.get('critical_count', 0) + latest_scan.get('high_count', 0)} HIGH / CRITICAL vulnerabilities detected in the latest configured scan"
+            else:
+                summary = "HIGH / CRITICAL vulnerabilities detected in the latest configured scan (check CI logs for details)"
+
+            status = gh_trivy.get("status", "FAILED")
         scanner = "Aqua Security Trivy (GitHub Actions)"
         target = "Container Filesystem"
     elif latest_scan is not None:
@@ -1091,9 +1115,9 @@ _github_cache = {
 def get_real_github_pipeline_data():
     """Fetch pipeline data from real GitHub Actions run API with caching."""
     global _github_cache
-    
-    # Return cached data if younger than 120 seconds
-    if _github_cache["data"] and time.time() - _github_cache["last_fetched"] < 120:
+
+    # Return cached data if younger than 15 seconds (respecting GitHub API rate limits while maintaining near real-time)
+    if _github_cache["data"] and time.time() - _github_cache["last_fetched"] < 15:
         return _github_cache["data"]
 
     token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
@@ -1111,11 +1135,13 @@ def get_real_github_pipeline_data():
         req_runs = urllib.request.Request(url_runs, headers=headers)
         with urllib.request.urlopen(req_runs, timeout=5) as resp:
             runs_data = json.loads(resp.read().decode())
-        
+
         runs = runs_data.get("workflow_runs", [])
         if not runs:
+            if _github_cache["data"]:
+                return _github_cache["data"]
             return None
-        
+
         latest_run = runs[0]
         run_id = latest_run.get("id")
 
@@ -1123,7 +1149,7 @@ def get_real_github_pipeline_data():
         req_jobs = urllib.request.Request(url_jobs, headers=headers)
         with urllib.request.urlopen(req_jobs, timeout=5) as resp:
             jobs_data = json.loads(resp.read().decode())
-        
+
         jobs = jobs_data.get("jobs", [])
         stages = []
         if jobs:
@@ -1148,10 +1174,10 @@ def get_real_github_pipeline_data():
                 }
                 if name not in OFFICIAL_STAGES:
                     continue
-                
+
                 gh_status = step.get("status")
                 gh_conclusion = step.get("conclusion")
-                
+
                 dashboard_status = "PENDING"
                 if gh_status == "queued":
                     dashboard_status = "PENDING"
@@ -1168,7 +1194,7 @@ def get_real_github_pipeline_data():
                         dashboard_status = "CANCELLED"
                     else:
                         dashboard_status = "PASSED"
-                        
+
                 started_at = step.get("started_at")
                 completed_at = step.get("completed_at")
                 duration_str = "0s"
@@ -1180,7 +1206,7 @@ def get_real_github_pipeline_data():
                         duration_str = f"{dur_sec}s"
                     except Exception:
                         pass
-                
+
                 id_mapping = {
                     "Checkout code": "checkout",
                     "Check Python": "python-check",
@@ -1196,7 +1222,7 @@ def get_real_github_pipeline_data():
                     "Deploy to EC2 via SSM": "ssm-deploy",
                     "Application health check": "health-check"
                 }
-                
+
                 stages.append({
                     "id": id_mapping.get(name, name.lower().replace(" ", "-").replace("(", "").replace(")", "")),
                     "name": name,
@@ -1204,7 +1230,7 @@ def get_real_github_pipeline_data():
                     "duration": duration_str,
                     "command": "GitHub Actions Step"
                 })
-                
+
             data = {
             "stages": stages,
             "run": latest_run,
@@ -1216,14 +1242,11 @@ def get_real_github_pipeline_data():
         return data
     except urllib.error.HTTPError as e:
         logger.error(f"GitHub API HTTP error: {e.code} - {e.reason}")
-        if e.code == 403:
-            _github_cache["last_fetched"] = time.time()  # Backoff for the cache duration
         if _github_cache["data"]:
             return _github_cache["data"]
         return None
     except Exception as e:
         logger.error(f"Failed to fetch GitHub pipeline stages: {e}")
-        _github_cache["last_fetched"] = time.time()  # Backoff
         if _github_cache["data"]:
             return _github_cache["data"]
         return None
@@ -1271,12 +1294,12 @@ def get_pipeline_stages():
             if r.get("duration_seconds", 0) > 60 and r.get("stages"):
                 found_db_stages = [dict(s) for s in r["stages"]]
                 break
-        
+
         if not found_db_stages:
             latest_run = database.get_latest_pipeline_run()
             if latest_run and latest_run.get("stages"):
                 found_db_stages = [dict(s) for s in latest_run["stages"]]
-                
+
         stages = found_db_stages if found_db_stages else default_stages
 
     for st in stages:

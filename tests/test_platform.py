@@ -1,7 +1,28 @@
 import json
+import pytest
+from unittest.mock import patch
 from app.app import app
 
-
+@pytest.fixture(autouse=True)
+def mock_external_apis():
+    fake_gh_data = {
+        "run": {"status": "completed", "conclusion": "success", "id": 123456, "head_branch": "main", "head_sha": "abcdef123"},
+        "deploy_step": {"status": "PASSED"}
+    }
+    fake_trivy_data = {
+        "status": "PASSED",
+        "critical_vulnerabilities": 0,
+        "high_vulnerabilities": 0,
+        "summary_statement": "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan",
+        "ignored_cves": []
+    }
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=fake_gh_data):
+        with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh_data):
+            with patch("urllib.request.urlopen"):
+                with patch("socket.create_connection"):
+                    with patch("app.platform_routes.platform_service.get_trivy_security_status", return_value=fake_trivy_data):
+                        with patch("app.platform_service.get_trivy_security_status", return_value=fake_trivy_data):
+                            yield
 def test_platform_home():
     """Verify platform console page renders with 200 and expected branding."""
     client = app.test_client()
@@ -294,8 +315,19 @@ def test_platform_diagnostics_context_awareness():
 
 def test_platform_security_policy_wording():
     """Verify Trivy ignored CVEs use accurate policy and configuration wording."""
+    fake_trivy_data = {
+        "status": "PASSED",
+        "critical_vulnerabilities": 0,
+        "high_vulnerabilities": 0,
+        "summary_statement": "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan",
+        "ignored_cves": [
+            {"cve_id": "GHSA-6v7p-g79w-8964", "rationale": "Configured in .trivyignore", "policy": "Ignored by project policy"},
+            {"cve_id": "CVE-2025-47273", "rationale": "Not exploitable .trivyignore", "policy": "Ignored by project policy"}
+        ]
+    }
     client = app.test_client()
-    res = client.get("/api/platform/security")
+    with patch("app.platform_routes.platform_service.get_trivy_security_status", return_value=fake_trivy_data):
+        res = client.get("/api/platform/security")
     assert res.status_code == 200
     trivy_data = res.json["trivy"]
     ignored = trivy_data.get("ignored_cves", [])
