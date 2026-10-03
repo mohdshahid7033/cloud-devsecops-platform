@@ -262,3 +262,8 @@ jobs:
 
           curl -X POST -H "Content-Type: application/json" -d '{"status": "Success", "details": "Pipeline completed successfully!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
           exit 0
+
+      - name: Catch-all Failure Webhook
+        if: failure()
+        run: |
+          curl -X POST -H "Content-Type: application/json" -d '{"status": "Failed", "details": "A workflow step failed!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
