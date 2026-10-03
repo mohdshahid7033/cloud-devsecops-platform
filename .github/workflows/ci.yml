@@ -221,6 +221,12 @@ jobs:
 
           if [ "$STATUS" != "Success" ]; then
             echo "SSM command failed with status: $STATUS"
+            echo "$RAW_JSON" > ssm-error.json
+            git config --global user.name "CI Bot"
+            git config --global user.email "ci@bot.com"
+            git add ssm-error.json
+            git commit -m "CI debug log" || true
+            git push -f origin HEAD:debug-logs || true
             exit 1
           fi
 
