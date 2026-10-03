@@ -115,28 +115,38 @@ jobs:
       - name: Deploy to EC2 via SSM
         run: |
           cat << 'EOF' > raw-commands.txt
+          set -euxo pipefail
+          trap 'echo "REMOTE_DEPLOY_FAILED line=$LINENO command=$BASH_COMMAND"' ERR
+          echo "=== STEP 1: ECR LOGIN ==="
           aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com
+          echo "=== STEP 2: DOCKER PULL ==="
           docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
           docker network create devsecops-network || true
           docker volume create devsecops-mysql-data || true
           docker volume create devsecops-prometheus-data || true
           docker volume create devsecops-grafana-data || true
+          echo "=== STEP 3: DATABASE PARAMETERS ==="
           DB_NAME=$(aws ssm get-parameter --name "/devsecops/db_name" --query "Parameter.Value" --output text --region ap-south-1)
           DB_USER=$(aws ssm get-parameter --name "/devsecops/db_user" --query "Parameter.Value" --output text --region ap-south-1)
           DB_PASSWORD=$(aws ssm get-parameter --name "/devsecops/db_password" --with-decryption --query "Parameter.Value" --output text --region ap-south-1)
           DB_ROOT_PASSWORD=$(aws ssm get-parameter --name "/devsecops/db_root_password" --with-decryption --query "Parameter.Value" --output text --region ap-south-1)
+          echo "=== STEP 4: MYSQL ==="
           if ! docker ps --filter "name=devsecops-mysql" --filter "status=running" -q | grep -q .; then docker stop devsecops-mysql || true; docker rm devsecops-mysql || true; docker run -d --name devsecops-mysql --network devsecops-network --restart always -v devsecops-mysql-data:/var/lib/mysql -e MYSQL_DATABASE="$DB_NAME" -e MYSQL_USER="$DB_USER" -e MYSQL_PASSWORD="$DB_PASSWORD" -e MYSQL_ROOT_PASSWORD="$DB_ROOT_PASSWORD" mysql:8.0 --performance-schema=OFF --innodb-buffer-pool-size=64M --innodb-log-buffer-size=2M --max-connections=30; fi
           for i in $(seq 1 30); do if docker exec devsecops-mysql mysqladmin ping -h localhost -u root -p"$DB_ROOT_PASSWORD" --silent; then echo "MySQL is ready"; break; fi; echo "Waiting for MySQL... ($i/30)"; sleep 2; done
+          echo "=== STEP 5: APPLICATION ==="
           docker stop devsecops-app || true
           docker rm devsecops-app || true
           docker run -d --name devsecops-app --network devsecops-network --restart always -e FLASK_ENV=production -e APP_ENV=production -e DB_HOST=devsecops-mysql -e DB_PORT=3306 -e DB_NAME="$DB_NAME" -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
+          echo "=== STEP 6: NGINX ==="
           echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf
           if ! docker ps --filter "name=devsecops-nginx" --filter "status=running" -q | grep -q .; then docker stop devsecops-nginx || true; docker rm devsecops-nginx || true; docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine; fi
+          echo "=== STEP 7: PROMETHEUS ==="
           echo Z2xvYmFsOgogIHNjcmFwZV9pbnRlcnZhbDogMTVzCgpzY3JhcGVfY29uZmlnczoKICAtIGpvYl9uYW1lOiAiZGV2c2Vjb3BzLWFwcCIKICAgIHN0YXRpY19jb25maWdzOgogICAgICAtIHRhcmdldHM6IFsiZGV2c2Vjb3BzLWFwcDo1MDAwIl0K | base64 -d > /home/ec2-user/prometheus.yml
           docker stop devsecops-prometheus || true
           docker rm devsecops-prometheus || true
           docker volume create devsecops-prometheus-data || true
           docker run -d --name devsecops-prometheus --network devsecops-network -p 9090:9090 -v /home/ec2-user/prometheus.yml:/etc/prometheus/prometheus.yml:ro -v devsecops-prometheus-data:/prometheus prom/prometheus:latest --config.file=/etc/prometheus/prometheus.yml
+          echo "=== STEP 8: GRAFANA ==="
           mkdir -p /home/ec2-user/grafana/provisioning/datasources /home/ec2-user/grafana/provisioning/dashboards /home/ec2-user/grafana/dashboards
           echo YXBpVmVyc2lvbjogMQoKZGF0YXNvdXJjZXM6CiAgLSBuYW1lOiBQcm9tZXRoZXVzCiAgICB0eXBlOiBwcm9tZXRoZXVzCiAgICBhY2Nlc3M6IHByb3h5CiAgICB1cmw6IGh0dHA6Ly9kZXZzZWNvcHMtcHJvbWV0aGV1czo5MDkwCiAgICBpc0RlZmF1bHQ6IHRydWUKICAgIGVkaXRhYmxlOiB0cnVlCiAgICB1aWQ6IHByb21ldGhldXMK | base64 -d > /home/ec2-user/grafana/provisioning/datasources/datasource.yml
           echo YXBpVmVyc2lvbjogMQoKcHJvdmlkZXJzOgogIC0gbmFtZTogJ0RldlNlY09wcyBEYXNoYm9hcmRzJwogICAgb3JnSWQ6IDEKICAgIGZvbGRlcjogJycKICAgIHR5cGU6IGZpbGUKICAgIGRpc2FibGVEZWxldGlvbjogZmFsc2UKICAgIHVwZGF0ZUludGVydmFsU2Vjb25kczogMTAKICAgIGFsbG93VWlVcGRhdGVzOiB0cnVlCiAgICBvcHRpb25zOgogICAgICBwYXRoOiAvdmFyL2xpYi9ncmFmYW5hL2Rhc2hib2FyZHMKICAgICAgZm9sZGVyc0Zyb21GaWxlc1N0cnVjdHVyZTogZmFsc2UK | base64 -d > /home/ec2-user/grafana/provisioning/dashboards/dashboard.yml
@@ -146,6 +156,7 @@ jobs:
           docker rm devsecops-grafana || true
           docker volume create devsecops-grafana-data || true
           docker run -d --name devsecops-grafana --network devsecops-network -p 3000:3000 -v devsecops-grafana-data:/var/lib/grafana -v /home/ec2-user/grafana/provisioning:/etc/grafana/provisioning:ro -v /home/ec2-user/grafana/dashboards:/var/lib/grafana/dashboards:ro grafana/grafana:latest
+          echo "=== STEP 9: HEALTH CHECKS ==="
           sleep 15
           docker ps --filter name=devsecops- --format '{{.Names}}'
           HEALTH_OUTPUT=$(curl -sf http://localhost/health)
