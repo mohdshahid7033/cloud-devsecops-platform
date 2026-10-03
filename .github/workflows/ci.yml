@@ -113,6 +113,7 @@ jobs:
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
 
       - name: Deploy to EC2 via SSM
+        run: |
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
           set -euxo pipefail
