@@ -114,6 +114,7 @@ jobs:
 
       - name: Deploy to EC2 via SSM
         run: |
+          set +e
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
           set -euxo pipefail
@@ -228,6 +229,7 @@ jobs:
 
       - name: Application health check
         run: |
+          set +e
           echo "Verifying production endpoint: http://13.232.174.161/health"
           max_attempts=12
           attempt=0
@@ -254,6 +256,7 @@ jobs:
           
           if [ "$healthy" != "true" ]; then
             echo "Production health check failed to confirm healthy status and live database connection."
+            curl -X POST -H "Content-Type: application/json" -d '{"status": "Failed", "details": "Health check timed out!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
             exit 1
           fi
 
