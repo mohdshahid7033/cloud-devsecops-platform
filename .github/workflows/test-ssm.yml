@@ -23,15 +23,27 @@ jobs:
           set +e
           TS=$(date +%s)
           mkdir -p iam_output
-          aws ec2 describe-instances \
+          
+          CMD_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands='["echo Hello_World"]' \
             --region ap-south-1 \
-            > iam_output/describe-$TS.json 2>&1
+            --query "Command.CommandId" \
+            --output text)
+            
+          sleep 15
+          
+          aws ssm get-command-invocation \
+            --instance-id i-0fb9dcbeb35b4fdbe \
+            --command-id $CMD_ID \
+            --region ap-south-1 \
+            > iam_output/simple-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test describe $TS" || true
+          git commit -m "Test simple $TS" || true
           sleep 10
           git pull --rebase origin main
           git push origin main
