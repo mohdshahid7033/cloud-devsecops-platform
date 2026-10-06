@@ -1,4 +1,4 @@
-name: Test SSM Update
+name: Describe Instance
 on:
   push:
     branches:
@@ -6,7 +6,7 @@ on:
 env:
   AWS_REGION: ap-south-1
 jobs:
-  test-ssm:
+  describe:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,27 +18,17 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Test Command
+      - name: Run Describe
         run: |
           set +e
-          TS=$(date +%s)
           mkdir -p iam_output
+          TS=$(date +%s)
           
-          # Test with AWS-UpdateSSMAgent
-          CMD1=$(aws ssm send-command \
-            --instance-ids "i-0fb9dcbeb35b4fdbe" \
-            --document-name "AWS-UpdateSSMAgent" \
-            --region ap-south-1 \
-            --query "Command.CommandId" \
-            --output text)
-            
-          sleep 15
-          
-          aws ssm get-command-invocation --instance-id i-0fb9dcbeb35b4fdbe --command-id $CMD1 --region ap-south-1 > iam_output/update-$TS.json 2>&1
+          aws ssm describe-instance-information --filters "Key=InstanceIds,Values=i-0fb9dcbeb35b4fdbe" > iam_output/desc-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test Update $TS" || true
+          git commit -m "Describe $TS" || true
           git pull --rebase origin main
           git push origin main
