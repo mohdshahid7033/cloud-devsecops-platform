@@ -1,4 +1,4 @@
-name: Test SSM
+name: Test SSM No Brackets
 on:
   push:
     branches:
@@ -24,26 +24,53 @@ jobs:
           TS=$(date +%s)
           mkdir -p iam_output
           
-          CMD_ID=$(aws ssm send-command \
+          # Test 1: shorthand, no brackets
+          CMD1=$(aws ssm send-command \
             --instance-ids "i-0fb9dcbeb35b4fdbe" \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["echo Hello World"]' \
+            --parameters commands="echo Hello" \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
             
+          # Test 2: multiple commands shorthand
+          CMD2=$(aws ssm send-command \
+            --instance-ids "i-0fb9dcbeb35b4fdbe" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands="echo Hello","whoami" \
+            --region ap-south-1 \
+            --query "Command.CommandId" \
+            --output text)
+
+          # Test 3: script file via aws ssm send-command with standard json
+          cat << 'EOF' > test.sh
+          #!/bin/bash
+          echo "Hello from script"
+          EOF
+          
+          # Properly form the JSON
+          jq -n \
+            --arg id "i-0fb9dcbeb35b4fdbe" \
+            --arg cmd "$(cat test.sh)" \
+            '{
+              "InstanceIds": [$id],
+              "DocumentName": "AWS-RunShellScript",
+              "Parameters": {
+                "commands": [$cmd]
+              }
+            }' > input.json
+            
+          CMD3=$(aws ssm send-command --cli-input-json file://input.json --region ap-south-1 --query "Command.CommandId" --output text)
+            
           sleep 15
           
-          aws ssm get-command-invocation \
-            --instance-id i-0fb9dcbeb35b4fdbe \
-            --command-id $CMD_ID \
-            --region ap-south-1 \
-            > iam_output/proper-$TS.json 2>&1
+          aws ssm get-command-invocation --instance-id i-0fb9dcbeb35b4fdbe --command-id $CMD1 --region ap-south-1 > iam_output/cmd1-$TS.json 2>&1
+          aws ssm get-command-invocation --instance-id i-0fb9dcbeb35b4fdbe --command-id $CMD2 --region ap-south-1 > iam_output/cmd2-$TS.json 2>&1
+          aws ssm get-command-invocation --instance-id i-0fb9dcbeb35b4fdbe --command-id $CMD3 --region ap-south-1 > iam_output/cmd3-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test direct params $TS" || true
-          sleep 10
+          git commit -m "Test no brackets $TS" || true
           git pull --rebase origin main
           git push origin main
