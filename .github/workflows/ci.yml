@@ -202,10 +202,18 @@ jobs:
           EOF
           
           # Run the script via SSM by echoing the base64 string and piping to base64 -d | bash
+          SCRIPT_BASE64=$(base64 -w 0 raw-commands.sh)
+          cat << EOF > ssm_input.json
+          {
+            "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
+            "DocumentName": "AWS-RunShellScript",
+            "Parameters": {
+              "commands": ["echo $SCRIPT_BASE64 | base64 -d | bash"]
+            }
+          }
+          EOF
           COMMAND_ID=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunShellScript" \
-            --parameters commands="id; uname -a; pwd" \
+            --cli-input-json file://ssm_input.json \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
