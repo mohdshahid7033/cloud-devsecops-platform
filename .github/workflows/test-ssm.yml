@@ -23,18 +23,15 @@ jobs:
           set +e
           TS=$(date +%s)
           mkdir -p iam_output
-          ssh-keygen -t rsa -N "" -f mykey
-          aws ec2-instance-connect send-ssh-public-key \
-            --instance-id i-0fb9dcbeb35b4fdbe \
-            --instance-os-user ubuntu \
-            --ssh-public-key file://mykey.pub \
+          aws ec2 reboot-instances \
+            --instance-ids i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 \
-            > iam_output/eic-$TS.json 2>&1
+            > iam_output/reboot-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test EIC $TS" || true
+          git commit -m "Test reboot $TS" || true
           sleep 10
           git pull --rebase origin main
           git push origin main
