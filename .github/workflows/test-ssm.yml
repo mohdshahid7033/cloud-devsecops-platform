@@ -23,16 +23,16 @@ jobs:
           set +e
           TS=$(date +%s)
           mkdir -p iam_output
-          aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-UpdateSSMAgent" \
+          aws ssm get-command-invocation \
+            --instance-id i-0fb9dcbeb35b4fdbe \
+            --command-id "0cd6f2be-5b1f-42fc-a03d-8e4f49dd4a22" \
             --region ap-south-1 \
-            > iam_output/update-agent-$TS.json 2>&1
+            > iam_output/invocation-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Update SSM agent $TS" || true
+          git commit -m "Get invocation $TS" || true
           sleep 10
           git pull --rebase origin main
           git push origin main
