@@ -1,4 +1,4 @@
-name: Describe Instance
+name: Test SSM Simple
 on:
   push:
     branches:
@@ -6,7 +6,7 @@ on:
 env:
   AWS_REGION: ap-south-1
 jobs:
-  describe:
+  test-ssm:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,17 +18,30 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Run Describe
+      - name: Run SSM
         run: |
           set +e
           mkdir -p iam_output
           TS=$(date +%s)
           
-          aws ssm describe-instance-information --filters "Key=InstanceIds,Values=i-0fb9dcbeb35b4fdbe" > iam_output/desc-$TS.json 2>&1
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids i-0fb9dcbeb35b4fdbe \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["echo Hello SSM", "pwd"]}' \
+            --region ap-south-1 \
+            --query "Command.CommandId" \
+            --output text 2>&1)
+            
+          sleep 15
           
+          aws ssm get-command-invocation \
+            --command-id $CMD_ID \
+            --instance-id i-0fb9dcbeb35b4fdbe \
+            --region ap-south-1 > iam_output/simple-$TS.json 2>&1
+            
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Describe $TS" || true
+          git commit -m "Test Simple $TS" || true
           git pull --rebase origin main
           git push origin main
