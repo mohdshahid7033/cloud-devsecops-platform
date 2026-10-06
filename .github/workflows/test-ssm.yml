@@ -22,12 +22,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Simple SSM Command
+      - name: Test Working Directory
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
             --document-name "AWS-RunShellScript" \
-            --parameters commands="id; uname -a; pwd" \
+            --parameters '{"commands":["id; uname -a; pwd"], "workingDirectory":["/home/ec2-user"]}' \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
