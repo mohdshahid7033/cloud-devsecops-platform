@@ -8,7 +8,10 @@ env:
 jobs:
   test-ssm:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v3
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -17,6 +20,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Test Command
         run: |
+          set -e
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
             --document-name "AWS-RunShellScript" \
@@ -29,4 +33,8 @@ jobs:
             --command-id "$COMMAND_ID" \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > result.json || true
-          curl -X POST -H "Content-Type: application/json" -d @result.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add result.json
+          git commit -m "Add SSM command result"
+          git push origin main
