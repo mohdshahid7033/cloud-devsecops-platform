@@ -27,7 +27,7 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
             --document-name "AWS-RunShellScript" \
-            --parameters commands="echo Hello World > /tmp/hello.txt; cat /tmp/hello.txt" \
+            --parameters commands="id; uname -a; pwd" \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
