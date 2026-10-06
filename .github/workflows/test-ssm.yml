@@ -1,4 +1,4 @@
-name: Test SSM Remote
+name: Test EC2 Connect
 on:
   push:
     branches:
@@ -6,7 +6,7 @@ on:
 env:
   AWS_REGION: ap-south-1
 jobs:
-  test-ssm:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,33 +18,22 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Run SSM Remote
+      - name: Test EC2 Connect
         run: |
           set +e
           mkdir -p iam_output
           TS=$(date +%s)
           
-          # We can use AWS-RunRemoteScript to pull from GitHub!
-          # But the repository is private? No, it's public. Or we can just try downloading a public raw URL.
+          ssh-keygen -t ed25519 -f my_key -N ""
           
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunRemoteScript" \
-            --parameters '{"sourceInfo":["{\"path\":\"https://raw.githubusercontent.com/mohdshahid7033/cloud-devsecops-platform/main/test.sh\"}"],"sourceType":["GitHub"],"commandLine":["test.sh"]}' \
-            --region ap-south-1 \
-            --query "Command.CommandId" \
-            --output text 2>&1)
-            
-          sleep 15
-          
-          aws ssm get-command-invocation \
-            --command-id $CMD_ID \
+          aws ec2-instance-connect send-ssh-public-key \
             --instance-id i-0fb9dcbeb35b4fdbe \
-            --region ap-south-1 > iam_output/remote-$TS.json 2>&1
+            --instance-os-user ec2-user \
+            --ssh-public-key file://my_key.pub > iam_output/connect-$TS.json 2>&1
             
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test Remote $TS" || true
+          git commit -m "Test Connect $TS" || true
           git pull --rebase origin main
           git push origin main
