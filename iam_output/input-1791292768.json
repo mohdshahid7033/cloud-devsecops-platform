@@ -1,0 +1,13 @@
+{
+  "InstanceIds": [
+    "i-0fb9dcbeb35b4fdbe"
+  ],
+  "DocumentName": "AWS-RunShellScript",
+  "Parameters": {
+    "commands": [
+      "#!/bin/bash",
+      "echo \"Hello World from properly formatted JSON\"",
+      ""
+    ]
+  }
+}
