@@ -23,15 +23,16 @@ jobs:
           set +e
           TS=$(date +%s)
           mkdir -p iam_output
-          aws ssm describe-instance-information \
-            --filters "Key=InstanceIds,Values=i-0fb9dcbeb35b4fdbe" \
+          aws ssm send-command \
+            --instance-ids i-0fb9dcbeb35b4fdbe \
+            --document-name "AWS-UpdateSSMAgent" \
             --region ap-south-1 \
-            > iam_output/instance-info-$TS.json 2>&1
+            > iam_output/update-agent-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Get instance info $TS" || true
+          git commit -m "Update SSM agent $TS" || true
           sleep 10
           git pull --rebase origin main
           git push origin main
