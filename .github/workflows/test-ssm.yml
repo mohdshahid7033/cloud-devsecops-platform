@@ -33,4 +33,6 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
           git commit -m "Get SSM command result $TS" || true
-          git push
+          sleep 15
+          git pull --rebase origin main
+          git push origin main
