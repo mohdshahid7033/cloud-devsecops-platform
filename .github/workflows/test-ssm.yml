@@ -3,7 +3,7 @@ name: Test SSM Debugging
 on:
   push:
     branches:
-      - test-ssm
+      - main
 
 env:
   AWS_REGION: ap-south-1
