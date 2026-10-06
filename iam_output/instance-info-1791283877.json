@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (AccessDeniedException) when calling the DescribeInstanceInformation operation: User: arn:aws:iam::850252650249:user/github-actions-devsecops is not authorized to perform: ssm:DescribeInstanceInformation on resource: arn:aws:ssm:ap-south-1:850252650249:* because no identity-based policy allows the ssm:DescribeInstanceInformation action
