@@ -128,8 +128,8 @@ jobs:
         run: |
           aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe > instance_info.json
           aws ssm describe-instance-information --filters "Key=InstanceIds,Values=i-0fb9dcbeb35b4fdbe" > ssm_info.json
-          curl -X POST -H "Content-Type: application/json" -d @instance_info.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-          curl -X POST -H "Content-Type: application/json" -d @ssm_info.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          curl -X POST -H "Content-Type: application/json" -d @instance_info.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
+          curl -X POST -H "Content-Type: application/json" -d @ssm_info.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
         continue-on-error: true
 
       - name: Deploy to EC2 via SSM
@@ -144,7 +144,7 @@ jobs:
           AutomationExecutionId: $AUTO_EXEC_ID
           UpdateAgentId: $UPDATE_AGENT
           EOF
-          curl -X POST -H "Content-Type: text/plain" -d @auto_test.txt https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          curl -X POST -H "Content-Type: text/plain" -d @auto_test.txt https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
 
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
@@ -208,10 +208,14 @@ jobs:
             "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
             "DocumentName": "AWS-RunShellScript",
             "Parameters": {
-              "commands": ["echo $SCRIPT_BASE64 | base64 -d | bash"]
+              "commands": ["echo $SCRIPT_BASE64 | base64 -d > /tmp/deploy.sh && bash /tmp/deploy.sh"]
             }
           }
           EOF
+          
+          # Send the ssm_input.json to webhook for debugging
+          curl -X POST -H "Content-Type: application/json" -d @ssm_input.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
+
           COMMAND_ID=$(aws ssm send-command \
             --cli-input-json file://ssm_input.json \
             --region ap-south-1 \
@@ -258,7 +262,7 @@ jobs:
             echo "$STDERR"
           fi
 
-          curl -X POST -H "Content-Type: application/json" -d "$RAW_JSON" https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          curl -X POST -H "Content-Type: application/json" -d "$RAW_JSON" https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
 
           if [ "$STATUS" != "Success" ]; then
             echo "SSM command failed with status: $STATUS"
@@ -294,11 +298,11 @@ jobs:
           
           if [ "$healthy" != "true" ]; then
             echo "Production health check failed to confirm healthy status and live database connection."
-            curl -X POST -H "Content-Type: application/json" -d '{"status": "Failed", "details": "Health check timed out!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+            curl -X POST -H "Content-Type: application/json" -d '{"status": "Failed", "details": "Health check timed out!"}' https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
             exit 1
           fi
 
-          curl -X POST -H "Content-Type: application/json" -d '{"status": "Success", "details": "Pipeline completed successfully!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          curl -X POST -H "Content-Type: application/json" -d '{"status": "Success", "details": "Pipeline completed successfully!"}' https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
           exit 0
 
       - name: Catch-all Failure Webhook
@@ -307,7 +311,7 @@ jobs:
           cat << 'EOF' > payload.json
           ${{ toJSON(steps) }}
           EOF
-          curl -X POST -H "Content-Type: application/json" -d @payload.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          curl -X POST -H "Content-Type: application/json" -d @payload.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
 
 
 
