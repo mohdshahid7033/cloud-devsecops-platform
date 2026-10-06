@@ -217,13 +217,17 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
-          # Run the script via SSM by echoing the base64 string and piping to base64 -d | bash
-          SCRIPT_B64=$(base64 -w 0 raw-commands.sh)
+          # Run the script via SSM by passing it natively as an array
+          jq -R -s '{
+            "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
+            "DocumentName": "AWS-RunShellScript",
+            "Parameters": {
+              "commands": split("\n")
+            }
+          }' raw-commands.sh > ssm_input.json
           
           COMMAND_ID=$(aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunShellScript" \
-            --parameters commands="echo $SCRIPT_B64 | base64 -d | bash" \
+            --cli-input-json file://ssm_input.json \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
