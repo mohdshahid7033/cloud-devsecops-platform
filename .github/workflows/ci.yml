@@ -201,17 +201,17 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
-          # Run the script via SSM by echoing the base64 string and piping to base64 -d | bash
-          SCRIPT_BASE64=$(base64 -w 0 raw-commands.sh)
-          cat << EOF > ssm_input.json
-          {
+          # Convert the script into a JSON array of strings
+          jq -R -s -c 'split("\n") | map(select(length > 0))' raw-commands.sh > script_array.json
+          
+          # Create the SSM input JSON
+          jq -n --argjson cmds "$(<script_array.json)" '{
             "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
             "DocumentName": "AWS-RunShellScript",
             "Parameters": {
-              "commands": ["echo $SCRIPT_BASE64 | base64 -d > /tmp/deploy.sh && bash /tmp/deploy.sh"]
+              "commands": $cmds
             }
-          }
-          EOF
+          }' > ssm_input.json
           
           # Send the ssm_input.json to webhook for debugging
           curl -X POST -H "Content-Type: application/json" -d @ssm_input.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
