@@ -1,0 +1,15 @@
+{
+    "CommandId": "36be2edd-81f2-4943-ad76-24868fdbe350",
+    "InstanceId": "i-0fb9dcbeb35b4fdbe",
+    "Comment": "",
+    "DocumentName": "AWS-UpdateSSMAgent",
+    "DocumentVersion": "$DEFAULT",
+    "ResponseCode": 0,
+    "ExecutionEndDateTime": "",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
