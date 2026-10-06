@@ -201,15 +201,15 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
-          # Convert the script into a JSON array of strings
-          jq -R -s -c 'split("\n") | map(select(length > 0))' raw-commands.sh > script_array.json
+          # Convert the script into a SINGLE JSON string (not an array of lines)
+          jq -Rs '.' raw-commands.sh > script_string.json
           
           # Create the SSM input JSON
-          jq -n --argjson cmds "$(<script_array.json)" '{
+          jq -n --argjson script "$(<script_string.json)" '{
             "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
             "DocumentName": "AWS-RunShellScript",
             "Parameters": {
-              "commands": $cmds
+              "commands": [$script]
             }
           }' > ssm_input.json
           
