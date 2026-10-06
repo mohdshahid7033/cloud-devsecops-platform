@@ -1,0 +1,15 @@
+{
+    "CommandId": "8cb06d91-ca01-4bd7-b577-62746f7ed4c2",
+    "InstanceId": "i-0fb9dcbeb35b4fdbe",
+    "Comment": "",
+    "DocumentName": "AWS-RunRemoteScript",
+    "DocumentVersion": "$DEFAULT",
+    "ResponseCode": 0,
+    "ExecutionEndDateTime": "",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
