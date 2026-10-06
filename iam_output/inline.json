@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (AccessDenied) when calling the ListUserPolicies operation: User: arn:aws:iam::850252650249:user/github-actions-devsecops is not authorized to perform: iam:ListUserPolicies on resource: user github-actions-devsecops because no identity-based policy allows the iam:ListUserPolicies action. Go to https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/authorization-details/9gy9z6jqcj0iw06alayc897ah for complete details, or call the GetRequestAuthorizationDetails API with the following authorization id: 9gy9z6jqcj0iw06alayc897ah
