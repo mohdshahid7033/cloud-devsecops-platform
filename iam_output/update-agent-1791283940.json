@@ -1,0 +1,42 @@
+{
+    "Command": {
+        "CommandId": "0cd6f2be-5b1f-42fc-a03d-8e4f49dd4a22",
+        "DocumentName": "AWS-UpdateSSMAgent",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "",
+        "ExpiresAfter": "2026-10-06T13:52:24.692000+00:00",
+        "Parameters": {},
+        "InstanceIds": [
+            "i-0fb9dcbeb35b4fdbe"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-06T10:52:24.692000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "ap-south-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 3600,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}
