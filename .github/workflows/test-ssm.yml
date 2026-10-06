@@ -23,15 +23,14 @@ jobs:
           set +e
           TS=$(date +%s)
           mkdir -p iam_output
-          aws ssm send-command \
-            --instance-ids i-0fb9dcbeb35b4fdbe \
-            --document-name "AWS-RunShellScript" \
-            --parameters commands="echo Hello_World" \
+          aws ssm get-command-invocation \
+            --command-id "dca47b74-9990-45c1-8c3e-79b23f058a43" \
+            --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 \
-            > iam_output/send-command-$TS.json 2>&1
+            > iam_output/get-command-$TS.json 2>&1
           
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Add SSM command result $TS" || true
+          git commit -m "Get SSM command result $TS" || true
           git push
