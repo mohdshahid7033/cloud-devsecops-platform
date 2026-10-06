@@ -24,24 +24,10 @@ jobs:
           TS=$(date +%s)
           mkdir -p iam_output
           
-          # Force LF for the script
-          cat << 'EOF' > test-script.sh
-          #!/bin/bash
-          echo "Hello World from properly formatted JSON" > /tmp/hello-test.txt
-          EOF
-          
-          sed -i 's/\r$//' test-script.sh
-          
-          jq -R -s '{
-            "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
-            "DocumentName": "AWS-RunShellScript",
-            "Parameters": {
-              "commands": [.]
-            }
-          }' test-script.sh > ssm_input.json
-          
           CMD_ID=$(aws ssm send-command \
-            --cli-input-json file://ssm_input.json \
+            --instance-ids "i-0fb9dcbeb35b4fdbe" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["echo Hello World"]' \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
@@ -57,7 +43,7 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add iam_output/
-          git commit -m "Test dos2unix and single string $TS" || true
+          git commit -m "Test direct params $TS" || true
           sleep 10
           git pull --rebase origin main
           git push origin main
