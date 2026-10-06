@@ -1,0 +1,20 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 13.232.174.161:80...
+* Connected to 13.232.174.161 (13.232.174.161) port 80
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0> GET /health HTTP/1.1
+> Host: 13.232.174.161
+> User-Agent: curl/8.5.0
+> Accept: */*
+> 
+< HTTP/1.1 200 OK
+< Server: nginx/1.31.6
+< Date: Tue, 06 Oct 2026 13:21:03 GMT
+< Content-Type: application/json
+< Content-Length: 177
+< Connection: keep-alive
+< 
+{ [177 bytes data]
+100   177  100   177    0     0    386      0 --:--:-- --:--:-- --:--:--   385
+* Connection #0 to host 13.232.174.161 left intact
+{"database":{"connected":true,"latency_ms":1.93,"mode":"live_mysql"},"environment":"production","service":"devsecops-platform","status":"healthy","version":"v1.0.1-production"}
