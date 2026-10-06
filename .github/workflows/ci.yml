@@ -201,15 +201,19 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
-          # Convert the script into a SINGLE JSON string (not an array of lines)
-          jq -Rs '.' raw-commands.sh > script_string.json
+          # Base64 encode the script to avoid SSM parsing errors and length limits
+          SCRIPT_B64=$(cat raw-commands.sh | base64 -w 0)
           
-          # Create the SSM input JSON
-          jq -n --argjson script "$(<script_string.json)" '{
+          # Create the SSM input JSON executing the decoded script
+          jq -n --arg b64 "$SCRIPT_B64" '{
             "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
             "DocumentName": "AWS-RunShellScript",
             "Parameters": {
-              "commands": [$script]
+              "commands": [
+                "echo \"$b64\" | base64 -d > /tmp/deploy.sh",
+                "chmod +x /tmp/deploy.sh",
+                "/tmp/deploy.sh"
+              ]
             }
           }' > ssm_input.json
           
