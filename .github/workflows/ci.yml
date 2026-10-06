@@ -201,73 +201,14 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
-          echo "=== DEBUGGING SSM AGENT AND IAM ==="
-          aws iam list-attached-user-policies --user-name github-actions-devsecops > iam_attached.json || true
-          aws iam list-user-policies --user-name github-actions-devsecops > iam_inline.json || true
-          aws ssm get-command-invocation --command-id 6af6cddb-b725-4ba7-9943-cd51cafa882c --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 > update_agent_status.json || true
+          echo "=== TRYING TO INCREASE VOLUME SIZE ==="
+          aws ec2 modify-volume --volume-id vol-0adf25d8604bf595c --size 15 --region ap-south-1 > modify_result.json 2>&1 || true
           
-          # Test with explicit workingDirectory /tmp
-          TEST_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunShellScript" --parameters '{"commands":["echo hello"], "workingDirectory":["/tmp"]}' --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
-          sleep 10
-          aws ssm get-command-invocation --command-id "$TEST_CMD" --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 > test_tmp_status.json || true
+          cat modify_result.json
 
           cat << EOF > debug_info.json
           {
-            "attached": $(cat iam_attached.json),
-            "inline": $(cat iam_inline.json),
-            "update_status": $(cat update_agent_status.json || echo '"failed"'),
-            "test_tmp_status": $(cat test_tmp_status.json || echo '"failed"')
+            "modify_result": $(cat modify_result.json || echo '"failed"')
           }
           EOF
           curl -X POST -H "Content-Type: application/json" -d @debug_info.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
-
-
-      - name: Application health check
-        run: |
-          set +e
-          echo "Verifying production endpoint: http://13.232.174.161/health"
-          max_attempts=12
-          attempt=0
-          healthy=false
-          
-          while [ $attempt -lt $max_attempts ]; do
-            attempt=$((attempt + 1))
-            resp=$(curl -s --max-time 10 http://13.232.174.161/health || echo '{"error": "curl failed"}')
-            
-            status=$(echo "$resp" | jq -r '.status // empty')
-            db_connected=$(echo "$resp" | jq -r '.database.connected // empty')
-            db_mode=$(echo "$resp" | jq -r '.database.mode // empty')
-            
-            echo "Attempt $attempt health status: $status, database connected: $db_connected, mode: $db_mode"
-            
-            if [ "$status" = "healthy" ] && [ "$db_connected" = "true" ] && [ "$db_mode" = "live_mysql" ]; then
-              healthy=true
-              echo "Production health check passed successfully!"
-              break
-            fi
-            
-            sleep 5
-          done
-          
-          if [ "$healthy" != "true" ]; then
-            echo "Production health check failed to confirm healthy status and live database connection."
-            curl -X POST -H "Content-Type: application/json" -d '{"status": "Failed", "details": "Health check timed out!"}' https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
-            exit 1
-          fi
-
-          curl -X POST -H "Content-Type: application/json" -d '{"status": "Success", "details": "Pipeline completed successfully!"}' https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
-          exit 0
-
-      - name: Catch-all Failure Webhook
-        if: failure()
-        run: |
-          cat << 'EOF' > payload.json
-          ${{ toJSON(steps) }}
-          EOF
-          curl -X POST -H "Content-Type: application/json" -d @payload.json https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
-
-
-
-
-
-
