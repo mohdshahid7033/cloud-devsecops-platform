@@ -230,9 +230,6 @@ jobs:
             --region ap-south-1 \
             --output json)
 
-          echo "=== SSM RAW JSON ==="
-          echo "$RAW_JSON"
-
           echo "=== SSM Standard Output ==="
           echo "$RAW_JSON" | jq -r '.StandardOutputContent'
 
