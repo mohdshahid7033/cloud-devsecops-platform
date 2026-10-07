@@ -124,44 +124,12 @@ jobs:
           docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
 
-      - name: Inspect Instance
-        run: |
-          aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe > instance_info.json
-          aws ssm describe-instance-information --filters "Key=InstanceIds,Values=i-0fb9dcbeb35b4fdbe" > ssm_info.json
-          curl -X POST -H "Content-Type: application/json" -d @instance_info.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-          curl -X POST -H "Content-Type: application/json" -d @ssm_info.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-        continue-on-error: true
+
 
       - name: Deploy to EC2 via SSM
         id: deploy_ssm
         run: |
           set +e
-          echo "=== Testing EC2 permissions ==="
-          cat << EOF > result.txt
-          DescribeInstances: $(aws ec2 describe-instances --instance-ids i-0fb9dcbeb35b4fdbe --region ap-south-1 2>&1 || true)
-          EOF
-          curl -X POST -H "Content-Type: text/plain" -d @result.txt https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-          
-          echo "=== OS DETECTION VIA SSM ==="
-          WIN_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunPowerShellScript" --parameters commands="Write-Host 'Hello from Windows'" --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
-          LINUX_CMD=$(aws ssm send-command --instance-ids i-0fb9dcbeb35b4fdbe --document-name "AWS-RunShellScript" --parameters commands="echo 'Hello from Linux'" --region ap-south-1 --query "Command.CommandId" --output text 2>&1 || true)
-          
-          echo "Waiting for 20 seconds..."
-          sleep 20
-          
-          WIN_OUT=$(aws ssm get-command-invocation --command-id $WIN_CMD --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json 2>&1 || true)
-          LINUX_OUT=$(aws ssm get-command-invocation --command-id $LINUX_CMD --instance-id i-0fb9dcbeb35b4fdbe --region ap-south-1 --output json 2>&1 || true)
-          
-          cat << EOF > os_test.txt
-          WIN_CMD: $WIN_CMD
-          LINUX_CMD: $LINUX_CMD
-          Windows Output:
-          $WIN_OUT
-          Linux Output:
-          $LINUX_OUT
-          EOF
-          curl -X POST -H "Content-Type: text/plain" -d @os_test.txt https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
-
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
           set -euxo pipefail
@@ -217,15 +185,14 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
-          # Run the script via SSM by passing it natively as an array
+          # Run the script via SSM by passing it natively as a single string
           jq -R -s '{
             "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
             "DocumentName": "AWS-RunShellScript",
             "Parameters": {
-              "commands": split("\n")
+              "commands": [.]
             }
           }' raw-commands.sh > ssm_input.json
-          
           COMMAND_ID=$(aws ssm send-command \
             --cli-input-json file://ssm_input.json \
             --region ap-south-1 \
@@ -306,20 +273,11 @@ jobs:
           
           if [ "$healthy" != "true" ]; then
             echo "Production health check failed to confirm healthy status and live database connection."
-            curl -X POST -H "Content-Type: application/json" -d '{"status": "Failed", "details": "Health check timed out!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
             exit 1
           fi
 
-          curl -X POST -H "Content-Type: application/json" -d '{"status": "Success", "details": "Pipeline completed successfully!"}' https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
+          echo "Pipeline completed successfully!"
           exit 0
-
-      - name: Catch-all Failure Webhook
-        if: failure()
-        run: |
-          cat << 'EOF' > payload.json
-          ${{ toJSON(steps) }}
-          EOF
-          curl -X POST -H "Content-Type: application/json" -d @payload.json https://webhook.site/3299c84f-741b-46b4-b27f-2b15cbcbc8d5
 
 
 
