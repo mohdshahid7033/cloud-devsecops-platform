@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (AccessDeniedException) when calling the StartSession operation: User: arn:aws:iam::850252650249:user/github-actions-devsecops is not authorized to perform: ssm:StartSession on resource: arn:aws:ec2:ap-south-1:850252650249:instance/i-0fb9dcbeb35b4fdbe because no identity-based policy allows the ssm:StartSession action
