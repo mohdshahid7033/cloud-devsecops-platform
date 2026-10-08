@@ -4,10 +4,10 @@ services:
     container_name: devsecops-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: devsecops_root_pass
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-local_root_pass_example}
       MYSQL_DATABASE: devsecops_db
       MYSQL_USER: devsecops_user
-      MYSQL_PASSWORD: devsecops_pass
+      MYSQL_PASSWORD: ${DB_PASSWORD:-local_db_pass_example}
     ports:
       - "3306:3306"
     volumes:
@@ -18,7 +18,7 @@ services:
           - mysql
           - devsecops-mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pdevsecops_root_pass"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-local_root_pass_example}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -36,7 +36,7 @@ services:
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=devsecops_user
-      - DB_PASSWORD=devsecops_pass
+      - DB_PASSWORD=${DB_PASSWORD:-local_db_pass_example}
       - DB_NAME=devsecops_db
       - APP_ENV=production
       - PROMETHEUS_HOST=prometheus
