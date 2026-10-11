@@ -53,53 +53,93 @@ This project was developed as a **Final Year BCA project**. The production envir
 The following diagram shows the complete system architecture across three layers: the CI/CD pipeline, the AWS production infrastructure, and the local development stack.
 
 ```mermaid
-graph TB
-    subgraph DEV["Local Development"]
-        CODE[Developer Workstation]
-        DC[Docker Compose<br/>5 Services]
-    end
+flowchart LR
 
-    subgraph CICD["GitHub Actions CI/CD Pipeline"]
-        GH[GitHub Repository<br/>main branch]
-        RUNNER[Ubuntu-Latest Runner<br/>Python 3.12]
-        PYTEST[Pytest<br/>34 Tests]
-        SONAR[SonarQube Community<br/>SAST Analysis]
-        TRIVY_FS[Trivy FS Scan<br/>HIGH/CRITICAL - blocking]
-        DOCKER_BUILD[Docker Build<br/>python:3.14-alpine]
-        TRIVY_IMG[Trivy Image Scan<br/>HIGH/CRITICAL - blocking]
-        ECR[Amazon ECR<br/>ap-south-1]
-        SSM_DEPLOY[AWS SSM<br/>AWS-RunShellScript]
-    end
+    DEV["👨💻 Developer Workstation"]
 
-    subgraph AWS["AWS Production - ap-south-1"]
-        EC2[EC2 t3.micro<br/>Amazon Linux 2]
-        subgraph CONTAINERS["Docker Containers on EC2"]
-            NGINX[Nginx:alpine<br/>Port 80 - Reverse Proxy]
-            APP[Flask App<br/>Python 3.14-alpine]
-            MYSQL[MySQL 8.0<br/>Persistent Volume]
-            PROM[Prometheus<br/>Port 9090]
-            GRAFANA[Grafana<br/>Port 3000]
+    subgraph LOCAL["Local Development"]
+        direction TB
+
+        subgraph DC["Docker Compose"]
+            direction TB
+
+            L_NGINX["Nginx<br/>Reverse Proxy :80"]
+            L_APP["Flask Application<br/>Container :5000"]
+            L_MYSQL["MySQL<br/>Database :3306"]
+            L_PROM["Prometheus<br/>Metrics :9090"]
+            L_GRAFANA["Grafana<br/>Dashboards :3000"]
+
+            L_NGINX --> L_APP
+            L_APP --> L_MYSQL
+            L_PROM -->|Scrapes /metrics| L_APP
+            L_PROM --> L_GRAFANA
         end
-        PARAM[SSM Parameter Store<br/>DB Credentials]
     end
 
-    CODE -->|git push| GH
-    GH -->|triggers| RUNNER
-    RUNNER --> PYTEST
-    PYTEST -->|pass| SONAR
-    SONAR -->|pass| TRIVY_FS
-    TRIVY_FS -->|pass| DOCKER_BUILD
-    DOCKER_BUILD --> TRIVY_IMG
-    TRIVY_IMG -->|pass| ECR
-    ECR -->|image pushed| SSM_DEPLOY
-    SSM_DEPLOY -->|zero-SSH command| EC2
-    EC2 --> CONTAINERS
-    PARAM -->|secrets at runtime| APP
-    NGINX --> APP
-    APP --> MYSQL
-    APP --> PROM
-    PROM --> GRAFANA
-    DC -.->|local parity| CONTAINERS
+    DEV -->|docker compose up| DC
+    DEV -->|git push / Pull Request| GH["GitHub Repository<br/>main branch"]
+
+    subgraph CI["GitHub Actions — CI/CD Pipeline"]
+        direction TB
+
+        CHECKOUT["Checkout Source"]
+        PYTHON["Python 3.12"]
+        TEST["Pytest<br/>34 Tests"]
+        SONAR["SonarQube<br/>Code Quality"]
+        TRIVY_FS["Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate"]
+        BUILD["Docker Build<br/>Python 3.14 Alpine"]
+        TRIVY_IMG["Trivy Image Scan<br/>HIGH / CRITICAL Gate"]
+        ECR_LOGIN["AWS Authentication<br/>ECR Login"]
+        PUSH["Push Image to<br/>Amazon ECR"]
+        SSM["AWS SSM Deployment<br/>Zero SSH"]
+        HEALTH["Production Health Check"]
+
+        CHECKOUT --> PYTHON
+        PYTHON --> TEST
+        TEST --> SONAR
+        SONAR --> TRIVY_FS
+        TRIVY_FS --> BUILD
+        BUILD --> TRIVY_IMG
+        TRIVY_IMG --> ECR_LOGIN
+        ECR_LOGIN --> PUSH
+        PUSH --> SSM
+        SSM --> HEALTH
+    end
+
+    GH --> CHECKOUT
+
+    subgraph AWS["AWS Production — ap-south-1"]
+        direction TB
+
+        ECR["Amazon ECR<br/>devsecops-platform"]
+
+        subgraph EC2["Amazon EC2"]
+            direction TB
+
+            NGINX["Nginx<br/>Reverse Proxy :80"]
+            APP["Flask Application<br/>Container :5000"]
+            MYSQL["MySQL<br/>Database :3306"]
+            PROM["Prometheus<br/>Metrics :9090"]
+            GRAFANA["Grafana<br/>Dashboards :3000"]
+
+            NGINX --> APP
+            APP --> MYSQL
+            PROM -->|Scrapes /metrics| APP
+            PROM --> GRAFANA
+        end
+
+        SSM_STORE["AWS SSM Parameter Store<br/>Production Secrets"]
+    end
+
+    PUSH --> ECR
+    EC2 -->|Pull image| ECR
+    SSM --> EC2
+
+    SSM_STORE -.->|Secure credentials| APP
+
+    USER["🌐 User / Browser"]
+
+    USER -->|HTTP :80| NGINX
 ```
 
 ### Component Summary
