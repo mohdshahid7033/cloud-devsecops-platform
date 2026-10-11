@@ -50,96 +50,106 @@ This project was developed as a **Final Year BCA project**. The production envir
 
 ## 2. Architecture
 
-The following diagram shows the complete system architecture across three layers: the CI/CD pipeline, the AWS production infrastructure, and the local development stack.
+The following diagram shows the complete system architecture across three layers: the CI/CD pipeline, the AWS production infrastructure, and the local development stack. The canonical, editable Mermaid source is maintained in [`docs/architecture.mmd`](docs/architecture.mmd).
 
 ```mermaid
 flowchart LR
 
-    DEV["👨💻 Developer Workstation"]
+    %% Actors
+    DEV["Developer Workstation"]
+    USER["End User / Browser"]
 
-    subgraph LOCAL["Local Development"]
+    %% AREA 1: Local Development
+    subgraph LOCAL["Area 1: Local Development Stack (Docker Compose)"]
         direction TB
 
-        subgraph DC["Docker Compose"]
+        subgraph DC["Docker Compose Environment (devsecops-network)"]
             direction TB
-
-            L_NGINX["Nginx<br/>Reverse Proxy :80"]
-            L_APP["Flask Application<br/>Container :5000"]
-            L_MYSQL["MySQL<br/>Database :3306"]
-            L_PROM["Prometheus<br/>Metrics :9090"]
+            L_NGINX["Nginx:alpine<br/>Reverse Proxy :80"]
+            L_APP["Flask Application<br/>Python 3.14-alpine :5000"]
+            L_MYSQL["MySQL 8.0<br/>devsecops_db :3306"]
+            L_PROM["Prometheus<br/>Metrics Scraper :9090"]
             L_GRAFANA["Grafana<br/>Dashboards :3000"]
 
-            L_NGINX --> L_APP
-            L_APP --> L_MYSQL
+            L_NGINX -->|proxy_pass :5000| L_APP
+            L_APP -->|TCP :3306| L_MYSQL
             L_PROM -->|Scrapes /metrics| L_APP
-            L_PROM --> L_GRAFANA
+            L_GRAFANA -->|Queries metrics :9090| L_PROM
         end
     end
 
-    DEV -->|docker compose up| DC
+    %% Developer Actions
+    DEV -->|docker compose up<br/>Local testing & parity| DC
     DEV -->|git push / Pull Request| GH["GitHub Repository<br/>main branch"]
 
-    subgraph CI["GitHub Actions — CI/CD Pipeline"]
+    %% AREA 2: CI/CD Pipeline
+    subgraph CICD["Area 2: CI/CD & Security Pipeline (GitHub Actions)"]
         direction TB
 
-        CHECKOUT["Checkout Source"]
-        PYTHON["Python 3.12"]
-        TEST["Pytest<br/>34 Tests"]
-        SONAR["SonarQube<br/>Code Quality"]
-        TRIVY_FS["Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate"]
-        BUILD["Docker Build<br/>Python 3.14 Alpine"]
-        TRIVY_IMG["Trivy Image Scan<br/>HIGH / CRITICAL Gate"]
-        ECR_LOGIN["AWS Authentication<br/>ECR Login"]
-        PUSH["Push Image to<br/>Amazon ECR"]
-        SSM["AWS SSM Deployment<br/>Zero SSH"]
-        HEALTH["Production Health Check"]
+        GH --> S1["1. Checkout Source<br/>actions/checkout@v4"]
+        S1 --> S2["2. Check Python<br/>actions/setup-python@v5 (3.12)"]
+        S2 --> S3["3. Install Dependencies<br/>pip install requirements, pytest, awscli"]
+        S3 --> S4["4. Run Tests (Pytest)<br/>34 Unit & Integration Tests (Blocking)"]
 
-        CHECKOUT --> PYTHON
-        PYTHON --> TEST
-        TEST --> SONAR
-        SONAR --> TRIVY_FS
-        TRIVY_FS --> BUILD
-        BUILD --> TRIVY_IMG
-        TRIVY_IMG --> ECR_LOGIN
-        ECR_LOGIN --> PUSH
-        PUSH --> SSM
-        SSM --> HEALTH
-    end
-
-    GH --> CHECKOUT
-
-    subgraph AWS["AWS Production — ap-south-1"]
-        direction TB
-
-        ECR["Amazon ECR<br/>devsecops-platform"]
-
-        subgraph EC2["Amazon EC2"]
+        subgraph QUALITY_SEC["Code Quality & Vulnerability Scanning"]
             direction TB
-
-            NGINX["Nginx<br/>Reverse Proxy :80"]
-            APP["Flask Application<br/>Container :5000"]
-            MYSQL["MySQL<br/>Database :3306"]
-            PROM["Prometheus<br/>Metrics :9090"]
-            GRAFANA["Grafana<br/>Dashboards :3000"]
-
-            NGINX --> APP
-            APP --> MYSQL
-            PROM -->|Scrapes /metrics| APP
-            PROM --> GRAFANA
+            S4 --> S5["5. SonarQube SAST Analysis<br/>sonarqube:community :9000 & Scanner 7.0.2"]
+            S5 --> S6["6. Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate (Blocking)"]
+            S6 --> S7["7. Build Docker Image<br/>Single-stage python:3.14-alpine"]
+            S7 --> S8["8. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
         end
 
-        SSM_STORE["AWS SSM Parameter Store<br/>Production Secrets"]
+        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4"]
+        S9 --> S10["10. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
+        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest"]
+        S11 --> S12["12. Deploy to EC2 via SSM<br/>AWS-RunShellScript (Zero-SSH)"]
+        S12 --> S13["13. Application Health Check<br/>curl /health (HTTP Validation)"]
     end
 
-    PUSH --> ECR
-    EC2 -->|Pull image| ECR
-    SSM --> EC2
+    %% AREA 3: AWS Production
+    subgraph AWS["Area 3: AWS Production Environment (ap-south-1)"]
+        direction TB
 
-    SSM_STORE -.->|Secure credentials| APP
+        ECR["Amazon ECR Registry<br/>devsecops-platform:latest"]
+        SSM_STORE["AWS SSM Parameter Store<br/>/devsecops/db_* Runtime Secrets"]
 
-    USER["🌐 User / Browser"]
+        subgraph VPC["AWS VPC (10.0.0.0/16) - Subnet (10.0.1.0/24)"]
+            direction TB
 
-    USER -->|HTTP :80| NGINX
+            subgraph EC2["EC2 Instance (t3.micro - Amazon Linux 2)"]
+                direction TB
+
+                SSM_AGENT["SSM Agent<br/>Executes Deployment Script"]
+
+                subgraph CONTAINERS["Docker Containers (devsecops-network)"]
+                    direction TB
+
+                    P_NGINX["Nginx:alpine<br/>Reverse Proxy :80"]
+                    P_APP["Flask Application<br/>devsecops-platform:latest :5000"]
+                    P_MYSQL["MySQL 8.0 Container<br/>devsecops_db :3306 (Persistent Volume)"]
+                    P_PROM["Prometheus Container<br/>Metrics Scraper :9090"]
+                    P_GRAFANA["Grafana Container<br/>Dashboards :3000"]
+
+                    P_NGINX -->|proxy_pass :5000| P_APP
+                    P_APP -->|TCP :3306| P_MYSQL
+                    P_PROM -->|Scrapes /metrics| P_APP
+                    P_GRAFANA -->|Queries metrics :9090| P_PROM
+                end
+
+                SSM_AGENT -->|1. docker pull| ECR
+                SSM_AGENT -->|2. aws ssm get-parameter| SSM_STORE
+                SSM_AGENT -->|3. Injects -e credentials & starts| CONTAINERS
+            end
+        end
+    end
+
+    %% Inter-Area Connections
+    S11 -->|Push latest image| ECR
+    S12 -->|Trigger zero-SSH script| SSM_AGENT
+    S13 -->|HTTP GET /health (validates status & live_mysql)| P_NGINX
+
+    %% End User Access
+    USER -->|HTTP Request :80| P_NGINX
 ```
 
 ### Component Summary
