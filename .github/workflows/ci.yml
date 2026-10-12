@@ -8,6 +8,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,11 +22,11 @@ jobs:
     steps:
       - name: Checkout code
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check Python
         id: setup_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -45,7 +48,7 @@ jobs:
 
       - name: Set up Java
         id: setup_java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -108,7 +111,8 @@ jobs:
 
       - name: Configure AWS credentials
         id: configure_aws
-        uses: aws-actions/configure-aws-credentials@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -116,28 +120,38 @@ jobs:
 
       - name: Login to Amazon ECR
         id: ecr_login
-        uses: aws-actions/amazon-ecr-login@v2
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
       - name: Push Docker image to ECR
         id: push_ecr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:${{ github.sha }}
           docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
+          docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:${{ github.sha }}
           docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
-
-
 
       - name: Deploy to EC2 via SSM
         id: deploy_ssm
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          set +e
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
-          set -euxo pipefail
-          trap 'echo "REMOTE_DEPLOY_FAILED line=$LINENO command=$BASH_COMMAND"' ERR
+          set -euo pipefail
+          trap 'echo "REMOTE_DEPLOY_FAILED line=$LINENO exit_code=$?"' ERR
           echo "=== STEP 1: ECR LOGIN ==="
           aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com
           echo "=== STEP 2: DOCKER PULL ==="
-          docker pull 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
+          DEPLOY_IMAGE="850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:__DEPLOY_SHA__"
+          echo "Pulling deployment image: $DEPLOY_IMAGE"
+          docker pull "$DEPLOY_IMAGE"
+          DEPLOYED_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$DEPLOY_IMAGE" 2>/dev/null || true)
+          if [ -n "$DEPLOYED_DIGEST" ]; then
+            echo "Deployed image digest: $DEPLOYED_DIGEST"
+          else
+            echo "Deployed image digest: not available"
+          fi
           docker network create devsecops-network || true
           docker volume create devsecops-mysql-data || true
           docker volume create devsecops-prometheus-data || true
@@ -153,7 +167,7 @@ jobs:
           echo "=== STEP 5: APPLICATION ==="
           docker stop devsecops-app || true
           docker rm devsecops-app || true
-          docker run -d --name devsecops-app --network devsecops-network --restart always -e FLASK_ENV=production -e APP_ENV=production -e DB_HOST=devsecops-mysql -e DB_PORT=3306 -e DB_NAME="$DB_NAME" -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
+          docker run -d --name devsecops-app --network devsecops-network --restart always -e FLASK_ENV=production -e APP_ENV=production -e DB_HOST=devsecops-mysql -e DB_PORT=3306 -e DB_NAME="$DB_NAME" -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" "$DEPLOY_IMAGE"
           echo "=== STEP 6: NGINX ==="
           echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf
           if ! docker ps --filter "name=devsecops-nginx" --filter "status=running" -q | grep -q .; then docker stop devsecops-nginx || true; docker rm devsecops-nginx || true; docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine; fi
@@ -185,6 +199,7 @@ jobs:
           curl -f http://localhost:3000/api/health
           EOF
           
+          sed -i "s|__DEPLOY_SHA__|${{ github.sha }}|g" raw-commands.sh
           DASHBOARD_BASE64=$(base64 -w 0 monitoring/grafana/dashboards/devsecops-dashboard.json)
           sed -i "s|__DASHBOARD_B64__|$DASHBOARD_BASE64|" raw-commands.sh
           
@@ -202,52 +217,114 @@ jobs:
             --query "Command.CommandId" \
             --output text)
 
+          if [ -z "$COMMAND_ID" ] || [ "$COMMAND_ID" = "None" ]; then
+            echo "Failed to dispatch SSM command: CommandId was empty or None" >&2
+            exit 1
+          fi
+
           echo "SSM Command ID: $COMMAND_ID"
 
           MAX_WAIT=120
+          START_TIME=$(date +%s)
           ELAPSED=0
           STATUS=""
+          LOOKUP_ERRORS=0
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
-            STATUS=$(aws ssm get-command-invocation \
-              --command-id $COMMAND_ID \
+            STATUS=$(timeout 15 aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
               --instance-id i-0fb9dcbeb35b4fdbe \
               --region ap-south-1 \
+              --cli-connect-timeout 5 \
+              --cli-read-timeout 10 \
               --query "Status" \
-              --output text)
+              --output text 2>/dev/null) || STATUS=""
 
-            echo "SSM Execution Status (${ELAPSED}s): $STATUS"
-            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              break
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                echo "SSM Execution Status (${ELAPSED}s elapsed): $STATUS"
+                break
+              elif [ "$STATUS" = "Success" ]; then
+                echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Received Success after deadline (${ELAPSED}s elapsed)." >&2
+                echo "The deployment exceeded the maximum allowed polling window of ${MAX_WAIT}s and cannot be accepted." >&2
+                echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+                exit 1
+              else
+                echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Last reported status: ${STATUS:-unknown} (${ELAPSED}s elapsed)." >&2
+                echo "The remote command on EC2 may still be in progress, so its final deployment state is unknown." >&2
+                echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+                exit 1
+              fi
             fi
+
+            if [ -z "$STATUS" ]; then
+              LOOKUP_ERRORS=$((LOOKUP_ERRORS + 1))
+              echo "Waiting for SSM invocation registration (${ELAPSED}s elapsed, attempt $LOOKUP_ERRORS/6)..."
+              if [ $LOOKUP_ERRORS -ge 6 ]; then
+                echo "SSM invocation lookup failed persistently after $LOOKUP_ERRORS consecutive attempts (${ELAPSED}s elapsed)" >&2
+                exit 1
+              fi
+            else
+              LOOKUP_ERRORS=0
+              echo "SSM Execution Status (${ELAPSED}s elapsed): $STATUS"
+              if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                break
+              fi
+            fi
+
             sleep 5
-            ELAPSED=$((ELAPSED + 5))
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
           done
+
+          if [ "$ELAPSED" -ge "$MAX_WAIT" ] && [ "$STATUS" = "Success" ]; then
+            echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Received Success after deadline (${ELAPSED}s elapsed)." >&2
+            echo "The deployment exceeded the maximum allowed polling window of ${MAX_WAIT}s and cannot be accepted." >&2
+            echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+            exit 1
+          fi
+
+          if [ "$STATUS" != "Success" ] && [ "$STATUS" != "Failed" ] && [ "$STATUS" != "TimedOut" ] && [ "$STATUS" != "Cancelled" ]; then
+            echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Last reported status: ${STATUS:-unknown} (${ELAPSED}s elapsed)." >&2
+            echo "The remote command on EC2 may still be in progress, so its final deployment state is unknown." >&2
+            echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+            exit 1
+          fi
 
           echo "Waiting for output to sync..."
           sleep 10
 
-          RAW_JSON=$(aws ssm get-command-invocation \
-            --command-id $COMMAND_ID \
+          RAW_JSON=$(timeout 15 aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 \
-            --output json)
+            --cli-connect-timeout 5 \
+            --cli-read-timeout 10 \
+            --output json 2>/dev/null || true)
 
-          echo "=== SSM Standard Output ==="
-          echo "$RAW_JSON" | jq -r '.StandardOutputContent'
+          if [ -n "$RAW_JSON" ]; then
+            echo "=== SSM Standard Output ==="
+            echo "$RAW_JSON" | jq -r '.StandardOutputContent // empty' 2>/dev/null || echo "Unable to parse SSM standard output" >&2
 
-          STDERR=$(echo "$RAW_JSON" | jq -r '.StandardErrorContent // empty')
-          if [ -n "$STDERR" ]; then
-            echo "=== SSM Standard Error ==="
-            echo "$STDERR"
+            STDERR=$(echo "$RAW_JSON" | jq -r '.StandardErrorContent // empty' 2>/dev/null || true)
+            if [ -n "$STDERR" ]; then
+              echo "=== SSM Standard Error ==="
+              echo "$STDERR"
+            fi
+          else
+            echo "Warning: Unable to retrieve final SSM invocation JSON output" >&2
           fi
 
           if [ "$STATUS" != "Success" ]; then
-            echo "SSM command failed with status: $STATUS"
+            echo "SSM command failed with status: $STATUS" >&2
             exit 1
           fi
 
       - name: Application health check
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set +e
           echo "Verifying production endpoint: http://13.232.174.161/health"
