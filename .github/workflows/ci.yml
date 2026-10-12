@@ -136,7 +136,6 @@ jobs:
         id: deploy_ssm
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          set +e
           cat << 'EOF' > raw-commands.sh
           #!/bin/bash
           set -euo pipefail
@@ -218,48 +217,109 @@ jobs:
             --query "Command.CommandId" \
             --output text)
 
+          if [ -z "$COMMAND_ID" ] || [ "$COMMAND_ID" = "None" ]; then
+            echo "Failed to dispatch SSM command: CommandId was empty or None" >&2
+            exit 1
+          fi
+
           echo "SSM Command ID: $COMMAND_ID"
 
           MAX_WAIT=120
+          START_TIME=$(date +%s)
           ELAPSED=0
           STATUS=""
+          LOOKUP_ERRORS=0
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
-            STATUS=$(aws ssm get-command-invocation \
-              --command-id $COMMAND_ID \
+            STATUS=$(timeout 15 aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
               --instance-id i-0fb9dcbeb35b4fdbe \
               --region ap-south-1 \
+              --cli-connect-timeout 5 \
+              --cli-read-timeout 10 \
               --query "Status" \
-              --output text)
+              --output text 2>/dev/null) || STATUS=""
 
-            echo "SSM Execution Status (${ELAPSED}s): $STATUS"
-            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              break
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                echo "SSM Execution Status (${ELAPSED}s elapsed): $STATUS"
+                break
+              elif [ "$STATUS" = "Success" ]; then
+                echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Received Success after deadline (${ELAPSED}s elapsed)." >&2
+                echo "The deployment exceeded the maximum allowed polling window of ${MAX_WAIT}s and cannot be accepted." >&2
+                echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+                exit 1
+              else
+                echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Last reported status: ${STATUS:-unknown} (${ELAPSED}s elapsed)." >&2
+                echo "The remote command on EC2 may still be in progress, so its final deployment state is unknown." >&2
+                echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+                exit 1
+              fi
             fi
+
+            if [ -z "$STATUS" ]; then
+              LOOKUP_ERRORS=$((LOOKUP_ERRORS + 1))
+              echo "Waiting for SSM invocation registration (${ELAPSED}s elapsed, attempt $LOOKUP_ERRORS/6)..."
+              if [ $LOOKUP_ERRORS -ge 6 ]; then
+                echo "SSM invocation lookup failed persistently after $LOOKUP_ERRORS consecutive attempts (${ELAPSED}s elapsed)" >&2
+                exit 1
+              fi
+            else
+              LOOKUP_ERRORS=0
+              echo "SSM Execution Status (${ELAPSED}s elapsed): $STATUS"
+              if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                break
+              fi
+            fi
+
             sleep 5
-            ELAPSED=$((ELAPSED + 5))
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
           done
+
+          if [ "$ELAPSED" -ge "$MAX_WAIT" ] && [ "$STATUS" = "Success" ]; then
+            echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Received Success after deadline (${ELAPSED}s elapsed)." >&2
+            echo "The deployment exceeded the maximum allowed polling window of ${MAX_WAIT}s and cannot be accepted." >&2
+            echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+            exit 1
+          fi
+
+          if [ "$STATUS" != "Success" ] && [ "$STATUS" != "Failed" ] && [ "$STATUS" != "TimedOut" ] && [ "$STATUS" != "Cancelled" ]; then
+            echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Last reported status: ${STATUS:-unknown} (${ELAPSED}s elapsed)." >&2
+            echo "The remote command on EC2 may still be in progress, so its final deployment state is unknown." >&2
+            echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
+            exit 1
+          fi
 
           echo "Waiting for output to sync..."
           sleep 10
 
-          RAW_JSON=$(aws ssm get-command-invocation \
-            --command-id $COMMAND_ID \
+          RAW_JSON=$(timeout 15 aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
             --instance-id i-0fb9dcbeb35b4fdbe \
             --region ap-south-1 \
-            --output json)
+            --cli-connect-timeout 5 \
+            --cli-read-timeout 10 \
+            --output json 2>/dev/null || true)
 
-          echo "=== SSM Standard Output ==="
-          echo "$RAW_JSON" | jq -r '.StandardOutputContent'
+          if [ -n "$RAW_JSON" ]; then
+            echo "=== SSM Standard Output ==="
+            echo "$RAW_JSON" | jq -r '.StandardOutputContent // empty' 2>/dev/null || echo "Unable to parse SSM standard output" >&2
 
-          STDERR=$(echo "$RAW_JSON" | jq -r '.StandardErrorContent // empty')
-          if [ -n "$STDERR" ]; then
-            echo "=== SSM Standard Error ==="
-            echo "$STDERR"
+            STDERR=$(echo "$RAW_JSON" | jq -r '.StandardErrorContent // empty' 2>/dev/null || true)
+            if [ -n "$STDERR" ]; then
+              echo "=== SSM Standard Error ==="
+              echo "$STDERR"
+            fi
+          else
+            echo "Warning: Unable to retrieve final SSM invocation JSON output" >&2
           fi
 
           if [ "$STATUS" != "Success" ]; then
-            echo "SSM command failed with status: $STATUS"
+            echo "SSM command failed with status: $STATUS" >&2
             exit 1
           fi
 
