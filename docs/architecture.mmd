@@ -91,7 +91,7 @@ flowchart LR
     %% Inter-Area Connections
     S11 -->|Push latest image| ECR
     S12 -->|Trigger zero-SSH script| SSM_AGENT
-    S13 -->|HTTP GET /health (validates status & live_mysql)| P_NGINX
+    S13 -->|HTTP GET /health - validates healthy status and live_mysql| P_NGINX
 
     %% End User Access
     USER -->|HTTP Request :80| P_NGINX
