@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initAutoRefresh();
   initModals();
   loadAllTelemetry();
+  initHealthIndicator();
 
   // Handle URL Hash navigation on initial load
   const initialHash = window.location.hash.replace('#', '');
@@ -141,6 +142,7 @@ function initAutoRefresh() {
   if (manualRefreshBtn) {
     manualRefreshBtn.addEventListener('click', () => {
       loadAllTelemetry();
+      checkHealth();
       showToast('Refreshing live telemetry...');
     });
   }
@@ -200,6 +202,7 @@ function renderOverview(data) {
   const chipDb = document.getElementById('chip-db');
   if (chipDb && m.database_health) {
     chipDb.textContent = m.database_health.connected ? `MySQL ${m.database_health.latency_ms || 8}ms` : 'DB Offline';
+    chipDb.style.color = m.database_health.connected ? '#fff' : 'var(--text-muted, #94a3b8)';
   }
 
   // Dashboard KPI Cards
@@ -1151,4 +1154,176 @@ function showToast(message, type = 'info') {
     toast.style.transition = 'opacity 0.3s ease';
     setTimeout(() => toast.remove(), 300);
   }, 4000);
+}
+
+// ==============================================================================
+// Live Health Status Indicator (/health)
+// ==============================================================================
+
+let healthPollTimer = null;
+let isHealthFetchInProgress = false;
+
+/**
+ * Validate whether response payload confirms healthy status according to backend contract.
+ * Enforces that required status, service, and database fields are present and valid.
+ * @param {any} data
+ * @returns {boolean}
+ */
+function isAppHealthy(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  if (typeof data.status !== 'string' || data.status.trim().toLowerCase() !== 'healthy') return false;
+  if (typeof data.service !== 'string' || !data.service.trim()) return false;
+  if (!data.database || typeof data.database !== 'object' || Array.isArray(data.database)) return false;
+  if (typeof data.database.connected !== 'boolean') return false;
+  if (typeof data.database.mode !== 'string') return false;
+  return true;
+}
+
+/**
+ * Update UI elements to reflect current health state.
+ * @param {'Checking…' | 'Healthy' | 'Unhealthy'} state
+ * @param {any} [data]
+ */
+function updateHealthUI(state, data) {
+  const textIndicator = document.getElementById('health-status-indicator');
+  const dotIndicator = document.getElementById('health-indicator-dot');
+  const chipContainer = document.getElementById('topbar-health-chip');
+  const badgeIndicator = document.getElementById('dash-app-health-badge');
+  const chipDb = document.getElementById('chip-db');
+
+  if (state === 'Checking…') {
+    if (textIndicator) textIndicator.textContent = 'Checking…';
+    if (dotIndicator) {
+      dotIndicator.style.background = 'var(--color-brand-light, #38bdf8)';
+      dotIndicator.className = 'dot';
+    }
+    if (chipContainer) {
+      chipContainer.setAttribute('aria-label', 'System Health: Checking…');
+    }
+    if (badgeIndicator) {
+      badgeIndicator.textContent = 'Checking…';
+      badgeIndicator.className = 'status-badge info';
+    }
+  } else if (state === 'Healthy') {
+    if (textIndicator) textIndicator.textContent = 'Healthy';
+    if (dotIndicator) {
+      dotIndicator.style.background = 'var(--color-success, #34d399)';
+      dotIndicator.className = 'dot pulse';
+    }
+    if (chipContainer) {
+      chipContainer.setAttribute('aria-label', 'System Health: Healthy');
+    }
+    if (badgeIndicator) {
+      badgeIndicator.textContent = 'Healthy';
+      badgeIndicator.className = 'status-badge success';
+    }
+  } else {
+    // Unhealthy state
+    if (textIndicator) textIndicator.textContent = 'Unhealthy';
+    if (dotIndicator) {
+      dotIndicator.style.background = 'var(--color-danger, #f87171)';
+      dotIndicator.className = 'dot';
+    }
+    if (chipContainer) {
+      chipContainer.setAttribute('aria-label', 'System Health: Unhealthy');
+    }
+    if (badgeIndicator) {
+      badgeIndicator.textContent = 'Unhealthy';
+      badgeIndicator.className = 'status-badge danger';
+    }
+  }
+
+  // Requirement 9: Do not display database connectivity as healthy unless actual response confirms condition
+  if (chipDb) {
+    if (data && data.database && data.database.connected === true) {
+      const latency = data.database.latency_ms ? ` (${data.database.latency_ms}ms)` : '';
+      chipDb.textContent = `MySQL Connected${latency}`;
+      chipDb.style.color = '#fff';
+    } else {
+      chipDb.textContent = 'DB Offline';
+      chipDb.style.color = 'var(--text-muted, #94a3b8)';
+    }
+  }
+}
+
+/**
+ * Fetch /health endpoint with timeout and update indicator state.
+ * Avoids overlapping requests.
+ */
+async function checkHealth() {
+  if (isHealthFetchInProgress) return;
+  isHealthFetchInProgress = true;
+
+  let controller = null;
+  let timeoutId = null;
+
+  if (typeof AbortController !== 'undefined') {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch (_) {}
+    }, 8000);
+  }
+
+  try {
+    const res = await fetch('/health', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: controller ? controller.signal : undefined
+    });
+
+    if (timeoutId) clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      updateHealthUI('Unhealthy');
+      return;
+    }
+
+    const data = await res.json();
+    if (isAppHealthy(data)) {
+      updateHealthUI('Healthy', data);
+    } else {
+      updateHealthUI('Unhealthy', data);
+    }
+  } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId);
+    updateHealthUI('Unhealthy');
+  } finally {
+    isHealthFetchInProgress = false;
+  }
+}
+
+function initHealthIndicator() {
+  updateHealthUI('Checking…');
+  checkHealth();
+
+  if (healthPollTimer) {
+    clearInterval(healthPollTimer);
+  }
+  healthPollTimer = setInterval(() => {
+    if (!isHealthFetchInProgress) {
+      checkHealth();
+    }
+  }, 15000);
+
+  const cleanup = () => {
+    if (healthPollTimer) {
+      clearInterval(healthPollTimer);
+      healthPollTimer = null;
+    }
+  };
+
+  window.addEventListener('beforeunload', cleanup);
+  window.addEventListener('unload', cleanup);
+}
+
+// Expose on window for runtime testing and verification
+if (typeof window !== 'undefined') {
+  window.DevSecOpsHealth = {
+    isAppHealthy,
+    checkHealth,
+    updateHealthUI,
+    initHealthIndicator
+  };
 }

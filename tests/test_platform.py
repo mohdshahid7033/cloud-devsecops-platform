@@ -360,3 +360,39 @@ def test_platform_monitoring_prometheus_states():
     assert data["state"] in ["CONNECTED", "DEGRADED", "UNAVAILABLE", "UNKNOWN"]
     assert "prometheus" in data
     assert "grafana" in data
+
+
+def test_dashboard_live_health_indicator():
+    """Verify dashboard contains compact live health status indicator and accessibility attributes."""
+    client = app.test_client()
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert 'id="topbar-health-chip"' in html
+    assert 'id="health-status-indicator"' in html
+    assert 'id="dash-app-health-badge"' in html
+    assert 'Checking…' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+    assert 'DB Offline' in html
+
+    js_res = client.get("/static/js/platform.js")
+    assert js_res.status_code == 200
+    js = js_res.data.decode("utf-8")
+    assert "isAppHealthy" in js
+    assert "checkHealth" in js
+    assert "updateHealthUI" in js
+    assert "initHealthIndicator" in js
+
+    # Verify actual /health response contract matches frontend validator requirements
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    data = health_res.json
+    assert data["status"] == "healthy"
+    assert data["service"] == "devsecops-platform"
+    assert "database" in data
+    assert isinstance(data["database"]["connected"], bool)
+    assert isinstance(data["database"]["mode"], str)
+    # When MySQL is offline locally, database.connected must be False
+    assert data["database"]["connected"] is False
+    assert data["database"]["mode"] in ["offline_fallback", "disconnected"]
