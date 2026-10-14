@@ -4,7 +4,7 @@ import json
 import logging
 import subprocess
 import urllib.request
-import urllib.error
+from datetime import datetime
 from flask import Blueprint, jsonify, request, current_app
 
 try:
@@ -46,21 +46,20 @@ def get_overview():
 
     if gh_data and gh_data.get("run"):
         run = gh_data["run"]
-        gh_run_status = run.get("status")
-        if gh_run_status == "queued":
-            pipe_status = "PENDING"
-        elif gh_run_status == "in_progress":
-            pipe_status = "RUNNING"
-        elif gh_run_status == "completed":
-            pipe_status = "PASSED" if run.get("conclusion") == "success" else "FAILED"
-        else:
-            pipe_status = "PENDING"
+        pipe_status = platform_service.map_github_workflow_status(
+            run.get("status"), run.get("conclusion")
+        )
 
         latest_pipe = {
             "run_id": str(run.get("id")),
+            "run_number": run.get("run_number"),
+            "name": run.get("name", "CI"),
             "status": pipe_status,
+            "conclusion": run.get("conclusion"),
+            "raw_status": run.get("status"),
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+            "html_url": run.get("html_url"),
             "stages": platform_service.get_pipeline_stages(),
             "created_at": run.get("created_at")
         }
@@ -344,38 +343,69 @@ def get_pipelines():
     """Retrieve CI/CD pipeline history and real 13-stage verification details."""
     runs = []
     gh_data = platform_service.get_real_github_pipeline_data()
-    
-    if gh_data and gh_data.get("run"):
-        run = gh_data["run"]
-        gh_run_status = run.get("status")
-        if gh_run_status == "queued":
-            pipe_status = "PENDING"
-        elif gh_run_status == "in_progress":
-            pipe_status = "RUNNING"
-        elif gh_run_status == "completed":
-            pipe_status = "PASSED" if run.get("conclusion") == "success" else "FAILED"
-        else:
-            pipe_status = "PENDING"
+    telemetry_source = "database_fallback"
+    latest_run_info = None
 
-        runs = [{
-            "run_id": str(run.get("id")),
-            "status": pipe_status,
-            "branch": run.get("head_branch"),
-            "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
-            "created_at": run.get("created_at"),
-            "stages": platform_service.get_pipeline_stages()
-        }]
-        
+    if gh_data and gh_data.get("run"):
+        telemetry_source = "github_actions"
+        workflow_runs = gh_data.get("runs") or [gh_data["run"]]
+        stages = platform_service.get_pipeline_stages()
+
+        for idx, run in enumerate(workflow_runs):
+            pipe_status = platform_service.map_github_workflow_status(
+                run.get("status"), run.get("conclusion")
+            )
+
+            # Calculate duration if timestamps are present
+            dur_sec = None
+            created_at = run.get("created_at")
+            updated_at = run.get("updated_at")
+            if created_at and updated_at:
+                try:
+                    s_t = datetime.strptime(created_at.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    c_t = datetime.strptime(updated_at.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    dur_sec = max(0, int((c_t - s_t).total_seconds()))
+                except Exception:
+                    dur_sec = None
+
+            run_entry = {
+                "run_id": str(run.get("id")),
+                "run_number": run.get("run_number"),
+                "name": run.get("name", "CI"),
+                "status": pipe_status,
+                "conclusion": run.get("conclusion"),
+                "raw_status": run.get("status"),
+                "branch": run.get("head_branch"),
+                "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+                "created_at": run.get("created_at"),
+                "updated_at": run.get("updated_at"),
+                "html_url": run.get("html_url"),
+                "event": run.get("event"),
+                "triggered_by": run.get("actor", {}).get("login") if isinstance(run.get("actor"), dict) and run.get("actor", {}).get("login") else (f"GitHub ({run.get('event')})" if run.get("event") else "GitHub Actions"),
+                "duration_seconds": dur_sec,
+                "stages": stages if idx == 0 else []
+            }
+            runs.append(run_entry)
+
+        if runs:
+            latest_run_info = dict(runs[0])
+
     if not runs:
         runs = database.get_pipeline_runs(limit=10)
-            
+        stages = platform_service.get_pipeline_stages()
+        if runs:
+            latest_run_info = runs[0]
+
     stages = platform_service.get_pipeline_stages()
-            
+
     return jsonify({
         "status": "success",
         "total": len(runs),
         "pipeline_runs": runs,
-        "stages": stages
+        "stages": stages,
+        "latest_run": latest_run_info,
+        "telemetry_source": telemetry_source,
+        "jobs": gh_data.get("jobs", []) if gh_data else []
     })
 
 

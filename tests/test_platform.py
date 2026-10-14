@@ -396,3 +396,290 @@ def test_dashboard_live_health_indicator():
     # When MySQL is offline locally, database.connected must be False
     assert data["database"]["connected"] is False
     assert data["database"]["mode"] in ["offline_fallback", "disconnected"]
+
+
+def test_map_github_workflow_status_matrix():
+    """Verify GitHub Actions status/conclusion mapping logic handles all states accurately."""
+    from app.platform_service import map_github_workflow_status
+
+    # In progress and queued states
+    assert map_github_workflow_status("in_progress") == "RUNNING"
+    assert map_github_workflow_status("queued") == "PENDING"
+    assert map_github_workflow_status("waiting") == "PENDING"
+    assert map_github_workflow_status("requested") == "PENDING"
+    assert map_github_workflow_status("pending") == "PENDING"
+
+    # Completed states
+    assert map_github_workflow_status("completed", "success") == "PASSED"
+    assert map_github_workflow_status("completed", "failure") == "FAILED"
+    assert map_github_workflow_status("completed", "timed_out") == "FAILED"
+    assert map_github_workflow_status("completed", "action_required") == "FAILED"
+    assert map_github_workflow_status("completed", "cancelled") == "CANCELLED"
+    assert map_github_workflow_status("completed", "skipped") == "SKIPPED"
+    assert map_github_workflow_status("completed", "neutral") == "PASSED"
+    # Never convert unexpected completed conclusion to success
+    assert map_github_workflow_status("completed", "stale") == "FAILED"
+
+    # Empty / unknown states
+    assert map_github_workflow_status(None) == "UNKNOWN"
+    assert map_github_workflow_status("") == "UNKNOWN"
+    assert map_github_workflow_status("some_random_state") == "UNKNOWN"
+
+
+def test_pipeline_endpoint_real_shaped_successful_run():
+    """Verify /api/platform/pipelines correctly structures a real-shaped successful workflow run."""
+    fake_payload = {
+        "status": "success",
+        "run": {
+            "id": 987654321,
+            "run_number": 161,
+            "name": "CI",
+            "status": "completed",
+            "conclusion": "success",
+            "head_branch": "main",
+            "head_sha": "2671dacdca3fe2d79db395610a4a1516516c5954",
+            "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654321",
+            "created_at": "2026-10-14T08:00:00Z",
+            "updated_at": "2026-10-14T08:04:30Z",
+            "event": "push",
+            "actor": {"login": "mohdshahid7033"}
+        },
+        "runs": [
+            {
+                "id": 987654321,
+                "run_number": 161,
+                "name": "CI",
+                "status": "completed",
+                "conclusion": "success",
+                "head_branch": "main",
+                "head_sha": "2671dacdca3fe2d79db395610a4a1516516c5954",
+                "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654321",
+                "created_at": "2026-10-14T08:00:00Z",
+                "updated_at": "2026-10-14T08:04:30Z",
+                "event": "push",
+                "actor": {"login": "mohdshahid7033"}
+            }
+        ],
+        "jobs": [
+            {"id": 11, "name": "test", "status": "completed", "conclusion": "success", "steps": []}
+        ],
+        "telemetry_source": "github_actions",
+        "last_fetched": 123456789.0
+    }
+
+    client = app.test_client()
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=fake_payload):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+        assert data["status"] == "success"
+        assert data["telemetry_source"] == "github_actions"
+        assert data["total"] == 1
+        assert len(data["pipeline_runs"]) == 1
+
+        run0 = data["pipeline_runs"][0]
+        assert run0["run_number"] == 161
+        assert run0["status"] == "PASSED"
+        assert run0["conclusion"] == "success"
+        assert run0["branch"] == "main"
+        assert run0["commit_hash"] == "2671dac"
+        assert run0["duration_seconds"] == 270
+        assert run0["html_url"] == "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654321"
+
+        latest = data["latest_run"]
+        assert latest is not None
+        assert latest["run_number"] == 161
+        assert latest["status"] == "PASSED"
+
+        # Check jobs
+        assert len(data["jobs"]) == 1
+        assert data["jobs"][0]["name"] == "test"
+        assert data["jobs"][0]["status"] == "completed"
+
+        # Check overview reflects it
+        overview_res = client.get("/api/platform/overview")
+        assert overview_res.status_code == 200
+        ov_data = overview_res.json
+        assert ov_data["metrics"]["pipeline_status"] == "PASSED"
+        assert ov_data["metrics"]["latest_pipeline_run"]["status"] == "PASSED"
+        assert ov_data["metrics"]["latest_pipeline_run"]["run_number"] == 161
+
+
+def test_pipeline_endpoint_in_progress_never_shows_success():
+    """Verify in-progress workflow run is NEVER presented as passed or successful."""
+    in_prog_payload = {
+        "run": {
+            "id": 987654322,
+            "run_number": 162,
+            "name": "CI",
+            "status": "in_progress",
+            "conclusion": None,
+            "head_branch": "main",
+            "head_sha": "a1b2c3d4e5f6",
+            "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654322",
+            "created_at": "2026-10-14T08:10:00Z",
+            "updated_at": "2026-10-14T08:11:00Z"
+        },
+        "runs": [
+            {
+                "id": 987654322,
+                "run_number": 162,
+                "name": "CI",
+                "status": "in_progress",
+                "conclusion": None,
+                "head_branch": "main",
+                "head_sha": "a1b2c3d4e5f6",
+                "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654322",
+                "created_at": "2026-10-14T08:10:00Z",
+                "updated_at": "2026-10-14T08:11:00Z"
+            }
+        ]
+    }
+
+    client = app.test_client()
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=in_prog_payload):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+        assert data["latest_run"]["status"] == "RUNNING"
+        assert data["latest_run"]["status"] != "PASSED"
+        assert data["latest_run"]["status"] != "SUCCESS"
+        assert data["pipeline_runs"][0]["status"] == "RUNNING"
+
+        # Check overview also shows RUNNING
+        overview_res = client.get("/api/platform/overview")
+        assert overview_res.status_code == 200
+        assert overview_res.json["metrics"]["pipeline_status"] == "RUNNING"
+        assert overview_res.json["metrics"]["latest_pipeline_run"]["status"] == "RUNNING"
+
+
+def test_pipeline_endpoint_failed_remains_failed():
+    """Verify failed workflow run remains FAILED and is never coerced to success."""
+    failed_payload = {
+        "run": {
+            "id": 987654323,
+            "run_number": 163,
+            "name": "CI",
+            "status": "completed",
+            "conclusion": "failure",
+            "head_branch": "main",
+            "head_sha": "f1e2d3c4b5a6",
+            "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654323",
+            "created_at": "2026-10-14T08:15:00Z",
+            "updated_at": "2026-10-14T08:16:30Z"
+        },
+        "runs": [
+            {
+                "id": 987654323,
+                "run_number": 163,
+                "name": "CI",
+                "status": "completed",
+                "conclusion": "failure",
+                "head_branch": "main",
+                "head_sha": "f1e2d3c4b5a6",
+                "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/987654323",
+                "created_at": "2026-10-14T08:15:00Z",
+                "updated_at": "2026-10-14T08:16:30Z"
+            }
+        ]
+    }
+
+    client = app.test_client()
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=failed_payload):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+        assert data["latest_run"]["status"] == "FAILED"
+        assert data["latest_run"]["status"] != "PASSED"
+        assert data["pipeline_runs"][0]["status"] == "FAILED"
+
+        overview_res = client.get("/api/platform/overview")
+        assert overview_res.status_code == 200
+        assert overview_res.json["metrics"]["pipeline_status"] == "FAILED"
+        assert overview_res.json["metrics"]["latest_pipeline_run"]["status"] == "FAILED"
+
+
+def test_pipeline_endpoint_cancelled_and_skipped_states():
+    """Verify cancelled and skipped workflow runs are mapped accurately."""
+    client = app.test_client()
+
+    for conc, expected in [("cancelled", "CANCELLED"), ("skipped", "SKIPPED")]:
+        payload = {
+            "run": {
+                "id": 987654324,
+                "run_number": 164,
+                "status": "completed",
+                "conclusion": conc,
+                "head_branch": "feature/test",
+                "head_sha": "1234567890ab"
+            },
+            "runs": [
+                {
+                    "id": 987654324,
+                    "run_number": 164,
+                    "status": "completed",
+                    "conclusion": conc,
+                    "head_branch": "feature/test",
+                    "head_sha": "1234567890ab"
+                }
+            ]
+        }
+        with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=payload):
+            res = client.get("/api/platform/pipelines")
+            assert res.status_code == 200
+            data = res.json
+            assert data["latest_run"]["status"] == expected
+            assert data["pipeline_runs"][0]["status"] == expected
+
+
+def test_pipeline_endpoint_fallback_and_malformed_responses():
+    """Verify missing, empty, or malformed GitHub API responses do not cause crashes or false success."""
+    client = app.test_client()
+
+    # Case 1: None returned
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=None):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+        assert data["status"] == "success"
+        assert data["telemetry_source"] == "database_fallback"
+        assert isinstance(data["pipeline_runs"], list)
+
+    # Case 2: Empty dict returned
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value={}):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+        assert data["status"] == "success"
+        assert data["telemetry_source"] == "database_fallback"
+
+    # Case 3: Run with invalid/malformed timestamps and missing fields
+    malformed = {
+        "run": {
+            "id": "not-an-int",
+            "status": None,
+            "created_at": "invalid-timestamp",
+            "updated_at": 12345
+        }
+    }
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=malformed):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+        assert data["latest_run"]["status"] == "UNKNOWN"
+        assert data["latest_run"]["duration_seconds"] is None
+
+
+def test_pipeline_endpoint_no_credentials_exposed(monkeypatch):
+    """Verify sensitive tokens and authorization headers are never leaked in responses."""
+    test_token = "ghp_secure_dummy_token_9876543210_abcdef"
+    monkeypatch.setenv("GITHUB_TOKEN", test_token)
+
+    client = app.test_client()
+    for endpoint in ["/api/platform/pipelines", "/api/platform/overview", "/"]:
+        res = client.get(endpoint)
+        assert res.status_code == 200
+        body = res.data.decode("utf-8")
+        assert test_token not in body
+        assert "ghp_" not in body
+        assert "Bearer ghp_" not in body

@@ -1112,6 +1112,35 @@ _github_cache = {
     "last_fetched": 0
 }
 
+def map_github_workflow_status(gh_status, gh_conclusion=None):
+    """
+    Accurately map GitHub Actions workflow status and conclusion to dashboard status.
+    Never converts errors, missing data, or incomplete runs into success.
+    """
+    if not gh_status:
+        return "UNKNOWN"
+    st = str(gh_status).lower().strip()
+    conc = str(gh_conclusion).lower().strip() if gh_conclusion else None
+
+    if st in ("queued", "waiting", "requested", "pending"):
+        return "PENDING"
+    if st == "in_progress":
+        return "RUNNING"
+    if st == "completed":
+        if conc == "success":
+            return "PASSED"
+        if conc in ("failure", "timed_out", "action_required"):
+            return "FAILED"
+        if conc == "cancelled":
+            return "CANCELLED"
+        if conc == "skipped":
+            return "SKIPPED"
+        if conc == "neutral":
+            return "PASSED"
+        return "FAILED"
+    return "UNKNOWN"
+
+
 def get_real_github_pipeline_data():
     """Fetch pipeline data from real GitHub Actions run API with caching."""
     global _github_cache
@@ -1131,7 +1160,7 @@ def get_real_github_pipeline_data():
         headers["Authorization"] = f"Bearer {token}"
 
     try:
-        url_runs = f"https://api.github.com/repos/{repo}/actions/runs?per_page=1"
+        url_runs = f"https://api.github.com/repos/{repo}/actions/runs?per_page=5"
         req_runs = urllib.request.Request(url_runs, headers=headers)
         with urllib.request.urlopen(req_runs, timeout=5) as resp:
             runs_data = json.loads(resp.read().decode())
@@ -1177,23 +1206,7 @@ def get_real_github_pipeline_data():
 
                 gh_status = step.get("status")
                 gh_conclusion = step.get("conclusion")
-
-                dashboard_status = "PENDING"
-                if gh_status == "queued":
-                    dashboard_status = "PENDING"
-                elif gh_status == "in_progress":
-                    dashboard_status = "RUNNING"
-                elif gh_status == "completed":
-                    if gh_conclusion == "success":
-                        dashboard_status = "PASSED"
-                    elif gh_conclusion == "failure":
-                        dashboard_status = "FAILED"
-                    elif gh_conclusion == "skipped":
-                        dashboard_status = "SKIPPED"
-                    elif gh_conclusion == "cancelled":
-                        dashboard_status = "CANCELLED"
-                    else:
-                        dashboard_status = "PASSED"
+                dashboard_status = map_github_workflow_status(gh_status, gh_conclusion)
 
                 started_at = step.get("started_at")
                 completed_at = step.get("completed_at")
@@ -1231,11 +1244,15 @@ def get_real_github_pipeline_data():
                     "command": "GitHub Actions Step"
                 })
 
-            data = {
+        data = {
             "stages": stages,
             "run": latest_run,
+            "runs": runs,
+            "jobs": jobs,
             "trivy_step": next((s for s in stages if "trivy image" in s["name"].lower() or "trivy filesystem" in s["name"].lower()), None),
-            "deploy_step": next((s for s in stages if "deploy to ec2" in s["name"].lower()), None)
+            "deploy_step": next((s for s in stages if "deploy to ec2" in s["name"].lower()), None),
+            "telemetry_source": "github_actions",
+            "last_fetched": time.time()
         }
         _github_cache["data"] = data
         _github_cache["last_fetched"] = time.time()
