@@ -156,6 +156,7 @@ function startPolling() {
     if (PlatformState.autoRefresh) {
       loadOverview(false);
       if (PlatformState.activeView === 'monitoring') loadMonitoring(false);
+      if (PlatformState.activeView === 'pipelines') loadPipelines(false);
     }
   }, 15000);
 }
@@ -210,13 +211,49 @@ function renderOverview(data) {
   if (projEl) projEl.innerHTML = `<span class="code-pill">${m.total_projects ?? 1}</span>`;
 
   setText('kpi-deployment-status', m.deployment_status ?? 'Live');
-  setText('kpi-pipeline-status', m.pipeline_status ?? 'PASSED');
+
+  // Pipeline Status KPI with dynamic styling
+  const pipeEl = document.getElementById('kpi-pipeline-status');
+  const pipeStatus = (m.pipeline_status || 'PENDING').toUpperCase();
+  if (pipeEl) {
+    pipeEl.textContent = pipeStatus;
+    if (pipeStatus === 'PASSED' || pipeStatus === 'SUCCESS') {
+      pipeEl.style.color = 'var(--color-success, #34d399)';
+    } else if (pipeStatus === 'RUNNING' || pipeStatus === 'IN_PROGRESS') {
+      pipeEl.style.color = 'var(--color-brand-light, #38bdf8)';
+    } else if (pipeStatus === 'FAILED') {
+      pipeEl.style.color = 'var(--color-danger, #f87171)';
+    } else if (pipeStatus === 'CANCELLED' || pipeStatus === 'SKIPPED') {
+      pipeEl.style.color = 'var(--text-muted, #94a3b8)';
+    } else {
+      pipeEl.style.color = 'var(--color-warning, #fbbf24)';
+    }
+  }
+
   setText('kpi-security-status', m.security_summary?.status ?? 'PASSED');
   setText('kpi-app-health', m.application_health?.status === 'healthy' ? 'Healthy (200 OK)' : 'Degraded');
   setText('kpi-db-health', m.database_health?.connected ? `MySQL (${m.database_health.latency_ms || 12}ms)` : 'Offline');
 
   // Pipeline meta
-  setText('kpi-pipeline-meta', m.pipeline_status === 'PASSED' ? 'All verification steps completed' : 'Pipeline status from latest run');
+  const pRun = m.latest_pipeline_run;
+  if (pRun) {
+    const runRef = pRun.run_number ? `#${pRun.run_number}` : (pRun.run_id ? pRun.run_id.slice(-6) : '');
+    const branchRef = pRun.branch ? ` on ${pRun.branch}` : '';
+    const commitRef = pRun.commit_hash ? ` (${pRun.commit_hash})` : '';
+    if (pipeStatus === 'PASSED' || pipeStatus === 'SUCCESS') {
+      setText('kpi-pipeline-meta', `All 13 stages passed${branchRef}${commitRef}`);
+    } else if (pipeStatus === 'RUNNING') {
+      setText('kpi-pipeline-meta', `Workflow run ${runRef} is currently executing${branchRef}…`);
+    } else if (pipeStatus === 'FAILED') {
+      setText('kpi-pipeline-meta', `Workflow run ${runRef} failed${branchRef}${commitRef}`);
+    } else if (pipeStatus === 'CANCELLED') {
+      setText('kpi-pipeline-meta', `Workflow run ${runRef} was cancelled${branchRef}`);
+    } else {
+      setText('kpi-pipeline-meta', `Pipeline status: ${pipeStatus}${branchRef}`);
+    }
+  } else {
+    setText('kpi-pipeline-meta', pipeStatus === 'PASSED' ? 'All verification steps completed' : 'Pipeline status from latest run');
+  }
 
   // Security meta
   const secSummary = m.security_summary || {};
@@ -467,12 +504,111 @@ async function triggerDeployment() {
 // Visual CI/CD Pipelines Controller
 // ==============================================================================
 
+let isPipelineFetchInProgress = false;
+
 async function loadPipelines() {
+  if (isPipelineFetchInProgress) return;
+  isPipelineFetchInProgress = true;
+
+  let controller = null;
+  let timeoutId = null;
+  if (typeof AbortController !== 'undefined') {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => {
+      try { controller.abort(); } catch (_) {}
+    }, 8000);
+  }
+
   try {
-    const res = await fetch('/api/platform/pipelines');
+    const res = await fetch('/api/platform/pipelines', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: controller ? controller.signal : undefined
+    });
+    if (timeoutId) clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      throw new Error(`Server returned HTTP ${res.status}`);
+    }
+
     const data = await res.json();
     const runs = data.pipeline_runs || [];
     const stages = data.stages || [];
+    const latestRun = data.latest_run || (runs.length > 0 ? runs[0] : null);
+
+    // Update Telemetry Source Badge
+    const telemBadge = document.getElementById('pipeline-telemetry-badge');
+    if (telemBadge) {
+      if (data.telemetry_source === 'github_actions') {
+        telemBadge.textContent = 'GitHub Actions Live';
+        telemBadge.className = 'status-badge info';
+        telemBadge.style.display = 'inline-block';
+      } else {
+        telemBadge.textContent = 'Database Telemetry';
+        telemBadge.className = 'status-badge';
+        telemBadge.style.display = 'inline-block';
+      }
+    }
+
+    // Update Latest Run Banner
+    const banner = document.getElementById('pipeline-latest-run-banner');
+    if (banner && latestRun) {
+      banner.style.display = 'block';
+      const runNumEl = document.getElementById('pipeline-run-number');
+      const branchEl = document.getElementById('pipeline-run-branch');
+      const commitEl = document.getElementById('pipeline-run-commit');
+      const statusBadge = document.getElementById('pipeline-run-status-badge');
+      const runLink = document.getElementById('pipeline-run-gh-link');
+      const dotEl = document.getElementById('pipeline-run-dot');
+
+      if (runNumEl) runNumEl.textContent = latestRun.run_number ? `Run #${latestRun.run_number}` : (latestRun.run_id || 'Latest');
+      if (branchEl) branchEl.textContent = latestRun.branch || 'main';
+      if (commitEl) commitEl.textContent = latestRun.commit_hash || '—';
+
+      const runStatus = (latestRun.status || 'PENDING').toUpperCase();
+      if (statusBadge) {
+        statusBadge.textContent = runStatus;
+        if (runStatus === 'PASSED' || runStatus === 'SUCCESS') {
+          statusBadge.className = 'status-badge success';
+        } else if (runStatus === 'RUNNING' || runStatus === 'IN_PROGRESS') {
+          statusBadge.className = 'status-badge info';
+        } else if (runStatus === 'FAILED') {
+          statusBadge.className = 'status-badge danger';
+        } else {
+          statusBadge.className = 'status-badge warning';
+        }
+      }
+
+      if (dotEl) {
+        if (runStatus === 'PASSED' || runStatus === 'SUCCESS') {
+          dotEl.style.background = 'var(--color-success, #34d399)';
+          dotEl.className = 'dot';
+        } else if (runStatus === 'RUNNING' || runStatus === 'IN_PROGRESS') {
+          dotEl.style.background = 'var(--color-brand-light, #38bdf8)';
+          dotEl.className = 'dot pulse';
+        } else if (runStatus === 'FAILED') {
+          dotEl.style.background = 'var(--color-danger, #f87171)';
+          dotEl.className = 'dot';
+        } else {
+          dotEl.style.background = 'var(--color-warning, #fbbf24)';
+          dotEl.className = 'dot';
+        }
+      }
+
+      if (runLink) {
+        if (latestRun.html_url) {
+          runLink.href = latestRun.html_url;
+          runLink.style.display = 'inline-flex';
+        } else {
+          runLink.style.display = 'none';
+        }
+      }
+
+      const viewGhBtn = document.getElementById('btn-view-gh-actions');
+      if (viewGhBtn && latestRun.html_url) {
+        viewGhBtn.href = latestRun.html_url;
+      }
+    }
 
     // Stage descriptions for the 13 stages
     const stageDescriptions = {
@@ -495,8 +631,15 @@ async function loadPipelines() {
     const flowEl = document.getElementById('visual-pipeline-flow');
     if (flowEl && stages.length > 0) {
       flowEl.innerHTML = stages.map((st, idx) => {
-        const stClass = st.status === 'PASSED' ? 'status-passed' : st.status === 'RUNNING' ? 'status-running' : st.status === 'FAILED' ? 'status-failed' : 'status-pending';
-        const icon = st.status === 'PASSED' ? '✓' : st.status === 'RUNNING' ? '⚡' : st.status === 'FAILED' ? '✗' : '⏸';
+        const stUpper = (st.status || 'PENDING').toUpperCase();
+        const stClass = stUpper === 'PASSED' || stUpper === 'SUCCESS' ? 'status-passed' :
+                        stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ? 'status-running' :
+                        stUpper === 'FAILED' ? 'status-failed' : 'status-pending';
+        const icon = stUpper === 'PASSED' || stUpper === 'SUCCESS' ? '✓' :
+                     stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ? '⚡' :
+                     stUpper === 'FAILED' ? '✗' :
+                     stUpper === 'SKIPPED' ? '↷' :
+                     stUpper === 'CANCELLED' ? '⊘' : '⏸';
         return `
           <div class="pipeline-node ${stClass}" onclick="showStageDetails(${idx})">
             <div class="pipeline-node-icon">${icon}</div>
@@ -508,12 +651,28 @@ async function loadPipelines() {
       }).join('');
     }
 
-    // Update badge dynamically
-    const passed = stages.filter(s => s.status === 'PASSED').length;
+    // Update badge dynamically based on latest run and stages
+    const passed = stages.filter(s => s.status === 'PASSED' || s.status === 'SUCCESS').length;
+    const running = stages.some(s => s.status === 'RUNNING' || s.status === 'IN_PROGRESS');
+    const failed = stages.some(s => s.status === 'FAILED');
     const badge = document.getElementById('pipeline-stages-badge');
     if (badge && stages.length > 0) {
-      badge.textContent = `${passed}/${stages.length} Completed`;
-      badge.className = `status-badge ${passed === stages.length ? 'success' : 'warning'}`;
+      if (latestRun && (latestRun.status === 'RUNNING' || running)) {
+        badge.textContent = `${passed}/${stages.length} Running…`;
+        badge.className = 'status-badge info';
+      } else if (latestRun && (latestRun.status === 'FAILED' || failed)) {
+        badge.textContent = `Pipeline Failed (${passed}/${stages.length})`;
+        badge.className = 'status-badge danger';
+      } else if (latestRun && latestRun.status === 'CANCELLED') {
+        badge.textContent = `Cancelled (${passed}/${stages.length})`;
+        badge.className = 'status-badge warning';
+      } else if (passed === stages.length) {
+        badge.textContent = `${passed}/${stages.length} Completed`;
+        badge.className = 'status-badge success';
+      } else {
+        badge.textContent = `${passed}/${stages.length} Completed`;
+        badge.className = 'status-badge warning';
+      }
     }
 
     // Sidebar badge
@@ -523,11 +682,14 @@ async function loadPipelines() {
       sidebarBadge.className = `nav-badge ${passed === stages.length ? 'text-success' : ''}`;
     }
 
-    // 2. Render pipeline stage detail list (new)
+    // 2. Render pipeline stage detail list
     const detailList = document.getElementById('pipeline-stages-detail-list');
     if (detailList && stages.length > 0) {
       detailList.innerHTML = stages.map((st, idx) => {
-        const stClass = st.status === 'PASSED' ? 'success' : st.status === 'RUNNING' ? 'info' : st.status === 'FAILED' ? 'danger' : 'warning';
+        const stUpper = (st.status || 'PENDING').toUpperCase();
+        const stClass = stUpper === 'PASSED' || stUpper === 'SUCCESS' ? 'success' :
+                        stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ? 'info' :
+                        stUpper === 'FAILED' ? 'danger' : 'warning';
         const desc = stageDescriptions[st.id] || '';
         return `
           <div class="pipeline-stage-row" onclick="showStageDetails(${idx})">
@@ -538,7 +700,7 @@ async function loadPipelines() {
             </div>
             <div class="stage-status-area">
               <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">${st.duration || '—'}</span>
-              <span class="status-badge ${stClass}">${escapeHtml(st.status)}</span>
+              <span class="status-badge ${stClass}">${escapeHtml(st.status || 'PENDING')}</span>
             </div>
           </div>
         `;
@@ -561,9 +723,9 @@ async function loadPipelines() {
 
       dashFlow.innerHTML = groups.map((g, gi) => {
         const groupStages = stages.filter(s => g.ids.includes(s.id));
-        const allPassed = groupStages.length > 0 && groupStages.every(s => s.status === 'PASSED');
-        const anyRunning = groupStages.some(s => s.status === 'RUNNING');
-        const anyFailed = groupStages.some(s => s.status === 'FAILED');
+        const allPassed = groupStages.length > 0 && groupStages.every(s => (s.status || '').toUpperCase() === 'PASSED' || (s.status || '').toUpperCase() === 'SUCCESS');
+        const anyRunning = groupStages.some(s => (s.status || '').toUpperCase() === 'RUNNING' || (s.status || '').toUpperCase() === 'IN_PROGRESS');
+        const anyFailed = groupStages.some(s => (s.status || '').toUpperCase() === 'FAILED');
         const stClass = anyFailed ? 'status-failed' : anyRunning ? 'status-running' : allPassed ? 'status-passed' : 'status-pending';
         const icon = anyFailed ? '✗' : anyRunning ? '⚡' : allPassed ? '✓' : '⏸';
         const dur = groupStages.map(s => s.duration || '').filter(Boolean).join(' ');
@@ -587,34 +749,41 @@ async function loadPipelines() {
         tbody.innerHTML = runs.map(r => {
           let durText = '';
           if (r.duration_seconds !== undefined && r.duration_seconds !== null) {
-            if (r.triggered_by && (r.triggered_by.includes('push') || r.duration_seconds > 60)) {
-              durText = `${r.duration_seconds}s <span style="font-size: 10px; color: var(--text-muted); display: block;">(CI/CD Workflow)</span>`;
-            } else if (r.duration_seconds <= 10) {
-              durText = `${r.duration_seconds}s <span style="font-size: 10px; color: var(--text-muted); display: block;">(Platform trigger duration)</span>`;
-            } else {
-              durText = `${r.duration_seconds}s <span style="font-size: 10px; color: var(--text-muted); display: block;">(Recorded duration)</span>`;
-            }
+            durText = `${r.duration_seconds}s`;
           } else {
-            durText = '<span style="color: var(--text-muted);">Not available</span>';
+            durText = '<span style="color: var(--text-muted);">—</span>';
           }
+
+          const rStatus = (r.status || 'PENDING').toUpperCase();
+          const badgeClass = (rStatus === 'PASSED' || rStatus === 'SUCCESS') ? 'success' :
+                             (rStatus === 'RUNNING' || rStatus === 'IN_PROGRESS') ? 'info' :
+                             (rStatus === 'FAILED') ? 'danger' : 'warning';
+
+          const runIdDisplay = r.run_number ? `#${r.run_number}` : (r.run_id ? (r.run_id.length > 12 ? r.run_id.slice(-8) : r.run_id) : '—');
+          const runIdCell = r.html_url ?
+            `<a href="${escapeHtml(r.html_url)}" target="_blank" rel="noopener noreferrer" class="code-pill" style="text-decoration: none;" title="Open Run on GitHub Actions">${escapeHtml(runIdDisplay)} ↗</a>` :
+            `<span class="code-pill">${escapeHtml(runIdDisplay)}</span>`;
 
           return `
             <tr>
-              <td><span class="code-pill">${escapeHtml(r.run_id)}</span></td>
-              <td><span class="code-pill">${escapeHtml(r.commit_hash)}</span></td>
+              <td>${runIdCell}</td>
+              <td><span class="code-pill">${escapeHtml(r.commit_hash || '—')}</span></td>
               <td><span class="code-pill">${escapeHtml(r.branch || 'main')}</span></td>
-              <td><span class="status-badge ${r.status === 'SUCCESS' ? 'success' : 'danger'}">${escapeHtml(r.status)}</span></td>
+              <td><span class="status-badge ${badgeClass}">${escapeHtml(rStatus)}</span></td>
               <td style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(r.triggered_by || 'GitHub Actions')}</td>
               <td style="font-size: 12px; font-family: var(--font-mono);">${durText}</td>
-              <td style="font-size: 12px; font-family: var(--font-mono);">${escapeHtml(r.created_at || '')}</td>
+              <td style="font-size: 12px; font-family: var(--font-mono);">${escapeHtml(r.created_at || '—')}</td>
             </tr>
           `;
         }).join('');
       }
     }
   } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId);
     console.error('Error loading pipelines:', err);
     showToast('Failed to load CI/CD pipeline data: ' + err.message, 'error');
+  } finally {
+    isPipelineFetchInProgress = false;
   }
 }
 
