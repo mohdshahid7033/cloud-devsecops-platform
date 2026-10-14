@@ -140,6 +140,11 @@
         </div>
 
         <div class="topbar-right">
+          <div class="status-chip" id="topbar-health-chip" role="status" aria-live="polite" aria-label="System Health: Checking…">
+            <span class="dot" id="health-indicator-dot" style="background: var(--color-brand-light, #38bdf8);"></span>
+            <span>Health:</span>
+            <span id="health-status-indicator" style="color: #fff; font-weight: 600;">Checking…</span>
+          </div>
           <div class="status-chip">
             <span class="dot pulse"></span>
             <span>AWS:</span>
@@ -151,7 +156,7 @@
           </div>
           <div class="status-chip">
             <span>Database:</span>
-            <span id="chip-db" style="color: #fff;">MySQL</span>
+            <span id="chip-db" style="color: var(--text-muted, #94a3b8);">DB Offline</span>
           </div>
           <button class="btn-platform btn-platform-outline btn-platform-sm" id="btn-auto-refresh">
             Auto-Refresh
@@ -393,7 +398,7 @@
             <div class="panel-card mb-0">
               <div class="panel-card-header">
                 <div class="panel-card-title">Application Health</div>
-                <span class="status-badge success" id="dash-app-health-badge">Healthy</span>
+                <span class="status-badge info" id="dash-app-health-badge" role="status" aria-live="polite">Checking…</span>
               </div>
               <div class="panel-card-body">
                 <div class="grid-2">
