@@ -217,6 +217,17 @@ function renderOverview(data) {
   const pipeStatus = (m.pipeline_status || 'PENDING').toUpperCase();
   if (pipeEl) {
     pipeEl.textContent = pipeStatus;
+    const pipeCard = pipeEl.closest('.kpi-card');
+    if (pipeCard) {
+      pipeCard.classList.remove('state-success', 'state-warning', 'state-danger');
+      if (pipeStatus === 'PASSED' || pipeStatus === 'SUCCESS') {
+        pipeCard.classList.add('state-success');
+      } else if (pipeStatus === 'RUNNING' || pipeStatus === 'IN_PROGRESS') {
+        pipeCard.classList.add('state-warning');
+      } else if (pipeStatus === 'FAILED') {
+        pipeCard.classList.add('state-danger');
+      }
+    }
     if (pipeStatus === 'PASSED' || pipeStatus === 'SUCCESS') {
       pipeEl.style.color = 'var(--color-success, #34d399)';
     } else if (pipeStatus === 'RUNNING' || pipeStatus === 'IN_PROGRESS') {
@@ -230,6 +241,29 @@ function renderOverview(data) {
     }
   }
 
+  const secCard = document.getElementById('kpi-security-status')?.closest('.kpi-card');
+  if (secCard) {
+    secCard.classList.remove('state-success', 'state-warning', 'state-danger');
+    const secSt = (m.security_summary?.status || '').toUpperCase();
+    if (secSt.includes('PASSED')) secCard.classList.add('state-success');
+    else if (secSt.includes('WARN')) secCard.classList.add('state-warning');
+    else if (secSt.includes('FAIL')) secCard.classList.add('state-danger');
+  }
+
+  const appCard = document.getElementById('kpi-app-health')?.closest('.kpi-card');
+  if (appCard) {
+    appCard.classList.remove('state-success', 'state-warning', 'state-danger');
+    if (m.application_health?.status === 'healthy') appCard.classList.add('state-success');
+    else appCard.classList.add('state-warning');
+  }
+
+  const dbCard = document.getElementById('kpi-db-health')?.closest('.kpi-card');
+  if (dbCard) {
+    dbCard.classList.remove('state-success', 'state-warning', 'state-danger');
+    if (m.database_health?.connected) dbCard.classList.add('state-success');
+    else dbCard.classList.add('state-danger');
+  }
+
   setText('kpi-security-status', m.security_summary?.status ?? 'PASSED');
   setText('kpi-app-health', m.application_health?.status === 'healthy' ? 'Healthy (200 OK)' : 'Degraded');
   setText('kpi-db-health', m.database_health?.connected ? `MySQL (${m.database_health.latency_ms || 12}ms)` : 'Offline');
@@ -241,7 +275,20 @@ function renderOverview(data) {
     const branchRef = pRun.branch ? ` on ${pRun.branch}` : '';
     const commitRef = pRun.commit_hash ? ` (${pRun.commit_hash})` : '';
     if (pipeStatus === 'PASSED' || pipeStatus === 'SUCCESS') {
-      setText('kpi-pipeline-meta', `All 13 stages passed${branchRef}${commitRef}`);
+      const stages = Array.isArray(pRun.stages) ? pRun.stages : [];
+      const passedCount = stages.filter(s => {
+        const st = (s.status || '').toUpperCase();
+        return st === 'PASSED' || st === 'SUCCESS';
+      }).length;
+      const skippedCount = stages.filter(s => (s.status || '').toUpperCase() === 'SKIPPED').length;
+
+      if (stages.length > 0 && skippedCount > 0) {
+        setText('kpi-pipeline-meta', `${passedCount}/${stages.length} stages passed (${skippedCount} skipped)${branchRef}${commitRef}`);
+      } else if (stages.length > 0) {
+        setText('kpi-pipeline-meta', `All ${stages.length} stages passed${branchRef}${commitRef}`);
+      } else {
+        setText('kpi-pipeline-meta', `All verification steps completed${branchRef}${commitRef}`);
+      }
     } else if (pipeStatus === 'RUNNING') {
       setText('kpi-pipeline-meta', `Workflow run ${runRef} is currently executing${branchRef}…`);
     } else if (pipeStatus === 'FAILED') {
@@ -634,12 +681,19 @@ async function loadPipelines() {
         const stUpper = (st.status || 'PENDING').toUpperCase();
         const stClass = stUpper === 'PASSED' || stUpper === 'SUCCESS' ? 'status-passed' :
                         stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ? 'status-running' :
-                        stUpper === 'FAILED' ? 'status-failed' : 'status-pending';
-        const icon = stUpper === 'PASSED' || stUpper === 'SUCCESS' ? '✓' :
-                     stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ? '⚡' :
-                     stUpper === 'FAILED' ? '✗' :
-                     stUpper === 'SKIPPED' ? '↷' :
-                     stUpper === 'CANCELLED' ? '⊘' : '⏸';
+                        stUpper === 'FAILED' ? 'status-failed' :
+                        stUpper === 'SKIPPED' ? 'status-skipped' : 'status-pending';
+        const icon = stUpper === 'PASSED' || stUpper === 'SUCCESS' ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>` :
+                     stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>` :
+                     stUpper === 'FAILED' ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` :
+                     stUpper === 'SKIPPED' ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>` :
+                     stUpper === 'CANCELLED' ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>` :
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1"/></svg>`;
         return `
           <div class="pipeline-node ${stClass}" onclick="showStageDetails(${idx})">
             <div class="pipeline-node-icon">${icon}</div>
@@ -689,7 +743,8 @@ async function loadPipelines() {
         const stUpper = (st.status || 'PENDING').toUpperCase();
         const stClass = stUpper === 'PASSED' || stUpper === 'SUCCESS' ? 'success' :
                         stUpper === 'RUNNING' || stUpper === 'IN_PROGRESS' ? 'info' :
-                        stUpper === 'FAILED' ? 'danger' : 'warning';
+                        stUpper === 'FAILED' ? 'danger' :
+                        stUpper === 'SKIPPED' ? 'skipped' : 'warning';
         const desc = stageDescriptions[st.id] || '';
         return `
           <div class="pipeline-stage-row" onclick="showStageDetails(${idx})">
@@ -726,8 +781,17 @@ async function loadPipelines() {
         const allPassed = groupStages.length > 0 && groupStages.every(s => (s.status || '').toUpperCase() === 'PASSED' || (s.status || '').toUpperCase() === 'SUCCESS');
         const anyRunning = groupStages.some(s => (s.status || '').toUpperCase() === 'RUNNING' || (s.status || '').toUpperCase() === 'IN_PROGRESS');
         const anyFailed = groupStages.some(s => (s.status || '').toUpperCase() === 'FAILED');
-        const stClass = anyFailed ? 'status-failed' : anyRunning ? 'status-running' : allPassed ? 'status-passed' : 'status-pending';
-        const icon = anyFailed ? '✗' : anyRunning ? '⚡' : allPassed ? '✓' : '⏸';
+        const anySkipped = groupStages.some(s => (s.status || '').toUpperCase() === 'SKIPPED');
+        const stClass = anyFailed ? 'status-failed' : anyRunning ? 'status-running' : allPassed ? 'status-passed' : anySkipped ? 'status-skipped' : 'status-pending';
+        const icon = anyFailed ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` :
+                     anyRunning ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>` :
+                     allPassed ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>` :
+                     anySkipped ?
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>` :
+                     `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1"/></svg>`;
         const dur = groupStages.map(s => s.duration || '').filter(Boolean).join(' ');
         return `
           <div class="pipeline-node ${stClass}">
@@ -812,7 +876,12 @@ function showStageDetails(stageIndex) {
 
     const statusBadge = document.getElementById('stage-modal-status');
     if (statusBadge) {
-      statusBadge.className = `status-badge ${stage.status === 'PASSED' ? 'success' : stage.status === 'RUNNING' ? 'info' : 'danger'}`;
+      const sUpper = (stage.status || '').toUpperCase();
+      const bCls = sUpper === 'PASSED' || sUpper === 'SUCCESS' ? 'success' :
+                   sUpper === 'RUNNING' || sUpper === 'IN_PROGRESS' ? 'info' :
+                   sUpper === 'SKIPPED' ? 'skipped' :
+                   sUpper === 'FAILED' ? 'danger' : 'warning';
+      statusBadge.className = `status-badge ${bCls}`;
     }
 
     openModal('modal-stage-details');

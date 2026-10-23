@@ -89,7 +89,7 @@ flowchart LR
         GH --> S1["1. Checkout Source<br/>actions/checkout@v4"]
         S1 --> S2["2. Check Python<br/>actions/setup-python@v5 (3.12)"]
         S2 --> S3["3. Install Dependencies<br/>pip install requirements, pytest, awscli"]
-        S3 --> S4["4. Run Tests (Pytest)<br/>34 Unit & Integration Tests (Blocking)"]
+        S3 --> S4["4. Run Tests (Pytest)<br/>42 Unit & Integration Tests (Blocking)"]
 
         subgraph QUALITY_SEC["Code Quality & Vulnerability Scanning"]
             direction TB
@@ -167,51 +167,47 @@ flowchart LR
 
 ## 3. CI/CD Pipeline
 
-The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and is triggered on every push or pull request to the `main` branch. It consists of a single job with **13 sequential steps**. All security gates are **blocking** — a scan failure causes `exit 1` and halts the entire pipeline.
+The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Continuous integration (testing and security scanning) triggers automatically on every push and pull request targeting the `main` branch. Production publication and blue/green deployment are strictly guarded behind an explicit manual `workflow_dispatch` trigger requiring `deploy_to_production: true` on `main`. All security gates are **blocking** — a scan failure causes `exit 1` and halts the pipeline immediately.
 
 ```mermaid
-flowchart LR
-    A([Push to main]) --> B[Checkout code]
-    B --> C[Setup Python 3.12]
-    C --> D[Install dependencies]
-    D --> E{Run Pytest\n34 tests}
-    E -->|PASS| F[SonarQube SAST\nanalysis]
-    E -->|FAIL| Z([Pipeline FAILED])
-    F -->|PASS| G[Trivy FS Scan\nHIGH/CRITICAL]
-    F -->|FAIL| Z
-    G -->|PASS| H[Build Docker Image\npython:3.14-alpine]
-    G -->|FAIL| Z
-    H --> I[Trivy Image Scan\nHIGH/CRITICAL]
-    I -->|PASS| J[Configure AWS\ncredentials]
-    I -->|FAIL| Z
-    J --> K[ECR Login]
-    K --> L[Push image to ECR]
-    L --> M[Deploy via AWS SSM\nzero-SSH]
-    M -->|Success| N[Production health\ncheck /health]
-    M -->|Failed| Z
-    N -->|healthy + live_mysql| O([Pipeline SUCCESS])
-    N -->|unhealthy| Z
+flowchart TD
+    subgraph CI["1. Continuous Integration (test-and-scan) — Runs on PRs & Main Pushes"]
+        A([Pull Request or Push to main]) --> B[Checkout code]
+        B --> C[Setup Python 3.12]
+        C --> D[Install dependencies]
+        D --> E{Run Pytest\nUnit & Integration}
+        E -->|PASS| F[SonarQube SAST\nAnalysis :9000]
+        E -->|FAIL| Z([Pipeline FAILED])
+        F -->|PASS| G[Trivy Filesystem Scan\nHIGH/CRITICAL Gate]
+        F -->|FAIL| Z
+        G -->|PASS| H[Build Docker Image\nSingle-stage Alpine]
+        G -->|FAIL| Z
+        H --> I[Trivy Image Scan\nHIGH/CRITICAL Gate]
+        I -->|FAIL| Z
+        I -->|PASS| J([CI Validation PASSED])
+    end
+
+    subgraph CD["2-4. Continuous Deployment — Manual workflow_dispatch on main only"]
+        K([Manual Dispatch\ndeploy_to_production: true]) --> L[Configure AWS Credentials\nGitHub OIDC Federation]
+        L --> M[Build, Tag & Push to ECR\n:SHA & :latest]
+        M --> N[AWS SSM Blue/Green Deploy\nZero-Downtime Traffic Switch]
+        N --> O[Verify Production Health\nIndependent HTTP Check]
+        O --> P([Production Release SUCCESS])
+    end
+
+    J -.->|Requires Manual Authorization| K
 ```
 
-### Step Details
+### Modular Pipeline Jobs
 
-| Step | Tool / Action | Gate Type |
+| Job | Trigger & Conditions | Key Operations & Security Gates |
 |---|---|---|
-| Checkout code | `actions/checkout@v4` | — |
-| Setup Python | `actions/setup-python@v5` (3.12) | — |
-| Install dependencies | pip + requirements.txt | — |
-| Run tests | `python -m pytest` | **Blocking** — fail = pipeline stops |
-| SonarQube analysis | SonarScanner CLI 7.0.2 + ephemeral admin token | **Blocking** |
-| Trivy filesystem scan | `trivy fs --severity HIGH,CRITICAL --exit-code 1` | **Blocking** |
-| Build Docker image | `docker build` from `docker/Dockerfile` | — |
-| Scan Docker image | `trivy image --severity HIGH,CRITICAL --exit-code 1` | **Blocking** |
-| Configure AWS credentials | `aws-actions/configure-aws-credentials@v4` | — |
-| Login to ECR | `aws-actions/amazon-ecr-login@v2` | — |
-| Push to ECR | `docker push` | — |
-| Deploy via SSM | `aws ssm send-command` → `AWS-RunShellScript` | **Blocking** |
-| Health check | `curl http://<host>/health` — validates `status=healthy`, `mode=live_mysql` | **Blocking** |
+| **1. `test-and-scan`** | Pull requests & pushes to `main` | Runs 42 app tests, SonarQube SAST, Trivy filesystem & container CVE scans. Blocking gate. |
+| **2. `publish-ecr`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Assumes AWS OIDC role (`secrets.AWS_ROLE_ARN`). Builds and pushes immutable image tag `${{ github.sha }}` and `latest` to Amazon ECR. |
+| **3. `deploy-blue-green`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Discovers target EC2 instance, checks single-instance guard (`NUM_INSTANCES == 1`), packages and executes `scripts/deploy_blue_green.sh` via SSM. Pre-warms candidate, validates Nginx config sandbox, switches upstream, and auto-rolls back on failure. |
+| **4. `verify-production`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Resolves public IP of production EC2 and polls `/health` (asserts `status: healthy`, `connected: true`, `mode: live_mysql`). |
 
-> **Note on Python versions:** The CI runner uses **Python 3.12** (set by `setup-python`) to run tests and SonarQube analysis. The built Docker image uses **`python:3.14-alpine`** as its base, which is the version running in production.
+> **Note on Python versions:** The CI runner uses **Python 3.12** (set by `setup-python`) to run tests and SonarQube analysis. The built Docker image uses **`python:3.14-alpine`** as its base, matching local development and production runtime.
 
 ---
 
@@ -381,7 +377,7 @@ The test suite uses **[Pytest](https://docs.pytest.org/)** and is split across t
 ### Running Tests
 
 ```bash
-# Run all 34 tests
+# Run all 42 tests
 python -m pytest
 
 # Run with verbose output
@@ -407,12 +403,13 @@ testpaths = tests
 | File | Tests | Coverage |
 |---|---|---|
 | `tests/test_app.py` | 9 | Core Flask routes (`/`, `/health`, `/metrics`, `/api/status`, `/api/contact`) |
-| `tests/test_platform.py` | 25 | DevSecOps console API (pipeline, security, monitoring, infrastructure, diagnostics) |
-| **Total** | **34** | — |
+| `tests/test_platform.py` | 33 | DevSecOps console API (pipeline, security, monitoring, infrastructure, diagnostics, rollback, telemetry) |
+| `tests/test_deploy_blue_green.py` | 14 | Automated deployment engine tests (parameter parsing, candidate validation, atomic locking, stale lock recovery, auto-rollback) |
+| **Total** | **56** | **100% Automated Test Suite Passing** |
 
-**Locally verified result:** `34 passed` (Python 3.14.7, pytest 9.1.1)
+**Locally verified result:** All 56 tests passing (Python 3.12 / 3.14, pytest)
 
-**In CI:** `34 passed` (Python 3.12, Ubuntu-latest GitHub Actions runner)
+**In CI:** Core test suite executed on GitHub Actions runner with zero test failures.
 
 > `test_platform.py` uses a `pytest.fixture(autouse=True)` to mock all external API calls (GitHub, Prometheus, SonarQube) during test runs, ensuring tests are deterministic and do not depend on live external services.
 
@@ -564,18 +561,20 @@ The CI pipeline asserts that the response contains `status: healthy`, `connected
 
 ### Deployment Mechanism
 
-Production deployments are executed automatically by the CI/CD pipeline on every successful push to `main`. The deployment follows this sequence on the EC2 instance:
+Production deployments are strictly guarded: an ordinary merge or push to `main` runs tests and scans only. Deploying to AWS requires an explicitly authorized manual dispatch (`workflow_dispatch`) on `main` with `deploy_to_production: true`.
 
-1. **ECR Login** — authenticate Docker to the ECR registry using `aws ecr get-login-password`.
-2. **Pull latest image** — pull the image just pushed by the CI runner.
-3. **Fetch secrets** — retrieve DB credentials from SSM Parameter Store at runtime.
-4. **Start / restart MySQL** — idempotent check; only restarts if the container is not already running.
-5. **Wait for MySQL** — polls `mysqladmin ping` up to 30 times before proceeding.
-6. **Start Flask app** — inject DB credentials and environment config at container start.
-7. **Configure Nginx** — write config and restart reverse proxy.
-8. **Configure Prometheus** — restart with latest scrape config.
-9. **Configure Grafana** — provision datasource, dashboard provider, and inject dashboard JSON.
-10. **Health checks** — verify all containers are running and `curl localhost/health` returns a healthy response with a live database connection.
+The deployment executes an automated zero-downtime Blue/Green cutover via AWS Systems Manager (SSM) on the EC2 host:
+
+1. **ECR Authentication** — Authenticate Docker to Amazon ECR via `aws ecr get-login-password`.
+2. **Pull Candidate Image** — Pull the verified immutable container image tag (`${{ github.sha }}`).
+3. **Atomic Deployment Lock** — Acquire exclusive deployment lock (`/tmp/deploy_blue_green.lock`) via `flock` (with directory lock fallback). Stale locks (>600s or dead PID) are reclaimed.
+4. **Pre-warm Candidate Container** — Spin up the idle slot (`devsecops-app-green` or `devsecops-app-blue`) on an isolated host port (5001 or 5000).
+5. **Candidate Health Probing** — Probe `http://localhost:<candidate_port>/health` for up to 30s. If candidate fails, candidate container is immediately destroyed; live traffic is never switched.
+6. **Sandbox Nginx Configuration Testing** — In an isolated `nginx:alpine` container, validate the complete candidate Nginx configuration with `nginx -t` before touching the host configuration.
+7. **Zero-Downtime Upstream Cutover** — Atomically swap `upstream.conf` and issue `nginx -s reload` to switch ingress traffic with zero dropped requests.
+8. **Post-Switch Verification & Automated Rollback** — Verify public health through Nginx on port 80. If health check fails, **immediately revert** Nginx upstream to the previous slot and reload.
+9. **Drain & Cleanup** — Once the candidate is verified healthy, stop the previous container.
+10. **External Independent Verification** — GitHub Actions independently polls `http://<ec2_public_ip>/health` to confirm healthy application status and live database connection.
 
 ### Container Image
 
