@@ -21,3 +21,39 @@ variable "availability_zone" {
   type        = string
   default     = "ap-south-1a"
 }
+
+variable "key_name" {
+  description = "EC2 Key Pair name for SSH emergency access (optional, SSM preferred)"
+  type        = string
+  default     = "devsecops-key"
+}
+
+variable "environment" {
+  description = "Deployment environment name"
+  type        = string
+  default     = "production"
+}
+
+variable "project_name" {
+  description = "Project name tag"
+  type        = string
+  default     = "devsecops-platform"
+}
+
+variable "github_repository" {
+  description = "GitHub repository path for OIDC authentication (owner/repo)"
+  type        = string
+  default     = "mohdshahid7033/cloud-devsecops-platform"
+}
+
+variable "github_branch" {
+  description = "Target branch for GitHub Actions OIDC deployments"
+  type        = string
+  default     = "main"
+}
+
+variable "create_github_oidc_provider" {
+  description = "Whether to create the AWS IAM OIDC provider for GitHub (set false if provider already exists in the AWS account)"
+  type        = bool
+  default     = false
+}

@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
@@ -7,18 +7,36 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      deploy_to_production:
+        description: 'Authorize Blue/Green deployment to production'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  id-token: write # Required for AWS OIDC authentication
+
+# Prevent concurrent deployment runs from publishing conflicting images or executing overlapping cutovers
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'production-deploy' || github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  test:
+  # ============================================================================
+  # 1. TEST AND SCAN (Validation-only, runs on PRs and main pushes)
+  # ============================================================================
+  test-and-scan:
+    name: Test & Security Scan
     runs-on: ubuntu-latest
     services:
       sonarqube:
         image: sonarqube:community
         ports:
           - 9000:9000
+
     steps:
       - name: Checkout code
         id: checkout
@@ -39,12 +57,12 @@ jobs:
           python -m pip install pytest
           python -m pip install awscli
 
-      - name: Run tests
+      - name: Run unit & integration tests
         id: run_tests
         env:
           PYTHONPATH: "."
         run: |
-          python -m pytest
+          python -m pytest tests/test_app.py tests/test_platform.py
 
       - name: Set up Java
         id: setup_java
@@ -99,7 +117,7 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
           trivy fs --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore .
 
-      - name: Build Docker image
+      - name: Build Docker image for security scan
         id: build_docker
         run: |
           docker build -t devsecops-platform -f docker/Dockerfile .
@@ -109,110 +127,212 @@ jobs:
         run: |
           trivy image --format table --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore devsecops-platform:latest
 
-      - name: Configure AWS credentials
-        id: configure_aws
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  # ============================================================================
+  # 2. PUBLISH ECR (Runs only on manual workflow_dispatch on main with deploy_to_production: true)
+  # ============================================================================
+  publish-ecr:
+    name: Build & Publish ECR
+    runs-on: ubuntu-latest
+    needs: [test-and-scan]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configure AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-south-1
 
       - name: Login to Amazon ECR
-        id: ecr_login
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
-      - name: Push Docker image to ECR
-        id: push_ecr
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Build, tag, and push image to ECR
+        env:
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID || '850252650249' }}.dkr.ecr.ap-south-1.amazonaws.com
+          ECR_REPOSITORY: devsecops-platform
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:${{ github.sha }}
-          docker tag devsecops-platform:latest 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
-          docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:${{ github.sha }}
-          docker push 850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f docker/Dockerfile .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-      - name: Deploy to EC2 via SSM
-        id: deploy_ssm
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  # ============================================================================
+  # 3. DEPLOY BLUE/GREEN (Safe traffic switch via SSM on target EC2 instance)
+  # ============================================================================
+  deploy-blue-green:
+    name: Blue/Green Deployment
+    runs-on: ubuntu-latest
+    needs: [publish-ecr]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configure AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Resolve target EC2 instance by tags
+        id: resolve_ec2
         run: |
-          cat << 'EOF' > raw-commands.sh
+          echo "Resolving running EC2 instance with tags Project=devsecops-platform, Environment=production..."
+          INSTANCES=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=devsecops-platform" \
+                      "Name=tag:Environment,Values=production" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].InstanceId" \
+            --output text \
+            --region ap-south-1)
+
+          NUM_INSTANCES=$(echo "$INSTANCES" | wc -w)
+          if [ "$NUM_INSTANCES" -ne 1 ]; then
+            echo "ERROR: Expected exactly 1 running instance, found $NUM_INSTANCES ($INSTANCES). Aborting deployment for safety." >&2
+            exit 1
+          fi
+
+          INSTANCE_ID=$(echo "$INSTANCES" | tr -d '[:space:]')
+          echo "Resolved unique target EC2 Instance ID: $INSTANCE_ID"
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Execute Blue/Green deployment via SSM
+        id: ssm_deploy
+        env:
+          TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID || '850252650249' }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          DEPLOY_IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:${IMAGE_TAG}"
+          DEPLOY_SCRIPT_GZ_B64=$(gzip -9c scripts/deploy_blue_green.sh | base64 -w 0)
+          DASHBOARD_GZ_B64=$(gzip -9c monitoring/grafana/dashboards/devsecops-dashboard.json | base64 -w 0)
+
+          cat << 'EOF' > remote_wrapper.sh
           #!/bin/bash
           set -euo pipefail
-          trap 'echo "REMOTE_DEPLOY_FAILED line=$LINENO exit_code=$?"' ERR
-          echo "=== STEP 1: ECR LOGIN ==="
-          aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 850252650249.dkr.ecr.ap-south-1.amazonaws.com
-          echo "=== STEP 2: DOCKER PULL ==="
-          DEPLOY_IMAGE="850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:__DEPLOY_SHA__"
-          echo "Pulling deployment image: $DEPLOY_IMAGE"
-          docker pull "$DEPLOY_IMAGE"
-          DEPLOYED_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$DEPLOY_IMAGE" 2>/dev/null || true)
-          if [ -n "$DEPLOYED_DIGEST" ]; then
-            echo "Deployed image digest: $DEPLOYED_DIGEST"
-          else
-            echo "Deployed image digest: not available"
-          fi
-          docker network create devsecops-network || true
-          docker volume create devsecops-mysql-data || true
-          docker volume create devsecops-prometheus-data || true
-          docker volume create devsecops-grafana-data || true
-          echo "=== STEP 3: DATABASE PARAMETERS ==="
+          trap 'echo "REMOTE_SSM_EXECUTION_FAILED line=$LINENO exit_code=$?"' ERR
+
+          echo "=== 1. PREPARING DEPLOYMENT DIRECTORIES ==="
+          mkdir -p /home/ec2-user/scripts
+          echo "__DEPLOY_SCRIPT_GZ_B64__" | base64 -d | gzip -d > /home/ec2-user/scripts/deploy_blue_green.sh
+          chmod +x /home/ec2-user/scripts/deploy_blue_green.sh
+
+          echo "=== 2. ECR AUTHENTICATION ==="
+          aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin "__AWS_ACCOUNT_ID__.dkr.ecr.ap-south-1.amazonaws.com"
+
+          echo "=== 3. ENSURING NETWORK AND DATABASE ==="
+          docker network create devsecops-network 2>/dev/null || true
+          docker volume create devsecops-mysql-data 2>/dev/null || true
+
           DB_NAME=$(aws ssm get-parameter --name "/devsecops/db_name" --query "Parameter.Value" --output text --region ap-south-1)
           DB_USER=$(aws ssm get-parameter --name "/devsecops/db_user" --query "Parameter.Value" --output text --region ap-south-1)
           DB_PASSWORD=$(aws ssm get-parameter --name "/devsecops/db_password" --with-decryption --query "Parameter.Value" --output text --region ap-south-1)
           DB_ROOT_PASSWORD=$(aws ssm get-parameter --name "/devsecops/db_root_password" --with-decryption --query "Parameter.Value" --output text --region ap-south-1)
-          echo "=== STEP 4: MYSQL ==="
-          if ! docker ps --filter "name=devsecops-mysql" --filter "status=running" -q | grep -q .; then docker stop devsecops-mysql || true; docker rm devsecops-mysql || true; docker run -d --name devsecops-mysql --network devsecops-network --restart always -v devsecops-mysql-data:/var/lib/mysql -e MYSQL_DATABASE="$DB_NAME" -e MYSQL_USER="$DB_USER" -e MYSQL_PASSWORD="$DB_PASSWORD" -e MYSQL_ROOT_PASSWORD="$DB_ROOT_PASSWORD" mysql:8.0 --performance-schema=OFF --innodb-buffer-pool-size=64M --innodb-log-buffer-size=2M --max-connections=30; fi
-          for i in $(seq 1 30); do if docker exec devsecops-mysql mysqladmin ping -h localhost -u root -p"$DB_ROOT_PASSWORD" --silent; then echo "MySQL is ready"; break; fi; echo "Waiting for MySQL... ($i/30)"; sleep 2; done
-          echo "=== STEP 5: APPLICATION ==="
-          docker stop devsecops-app || true
-          docker rm devsecops-app || true
-          docker run -d --name devsecops-app --network devsecops-network --restart always -e FLASK_ENV=production -e APP_ENV=production -e DB_HOST=devsecops-mysql -e DB_PORT=3306 -e DB_NAME="$DB_NAME" -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" "$DEPLOY_IMAGE"
-          echo "=== STEP 6: NGINX ==="
-          echo ZXZlbnRzIHt9Cmh0dHAgewogICAgc2VydmVyIHsKICAgICAgICBsaXN0ZW4gODA7CiAgICAgICAgbG9jYXRpb24gLyB7CiAgICAgICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2RldnNlY29wcy1hcHA6NTAwMDsKICAgICAgICB9CiAgICB9Cn0K | base64 -d > /home/ec2-user/nginx.conf
-          if ! docker ps --filter "name=devsecops-nginx" --filter "status=running" -q | grep -q .; then docker stop devsecops-nginx || true; docker rm devsecops-nginx || true; docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine; fi
-          echo "=== STEP 7: PROMETHEUS ==="
-          echo Z2xvYmFsOgogIHNjcmFwZV9pbnRlcnZhbDogMTVzCgpzY3JhcGVfY29uZmlnczoKICAtIGpvYl9uYW1lOiAiZGV2c2Vjb3BzLWFwcCIKICAgIHN0YXRpY19jb25maWdzOgogICAgICAtIHRhcmdldHM6IFsiZGV2c2Vjb3BzLWFwcDo1MDAwIl0K | base64 -d > /home/ec2-user/prometheus.yml
-          docker stop devsecops-prometheus || true
-          docker rm devsecops-prometheus || true
-          docker volume create devsecops-prometheus-data || true
-          docker run -d --name devsecops-prometheus --network devsecops-network -p 9090:9090 -v /home/ec2-user/prometheus.yml:/etc/prometheus/prometheus.yml:ro -v devsecops-prometheus-data:/prometheus prom/prometheus:latest --config.file=/etc/prometheus/prometheus.yml
-          echo "=== STEP 8: GRAFANA ==="
+
+          if ! docker ps --filter "name=^/devsecops-mysql$" --filter "status=running" -q | grep -q .; then
+              docker stop devsecops-mysql 2>/dev/null || true
+              docker rm devsecops-mysql 2>/dev/null || true
+              docker run -d --name devsecops-mysql --network devsecops-network --restart always \
+                  -v devsecops-mysql-data:/var/lib/mysql \
+                  -e MYSQL_DATABASE="$DB_NAME" \
+                  -e MYSQL_USER="$DB_USER" \
+                  -e MYSQL_PASSWORD="$DB_PASSWORD" \
+                  -e MYSQL_ROOT_PASSWORD="$DB_ROOT_PASSWORD" \
+                  mysql:8.0 --performance-schema=OFF --innodb-buffer-pool-size=64M --innodb-log-buffer-size=2M --max-connections=30
+          fi
+
+          for i in $(seq 1 30); do
+              if docker exec devsecops-mysql mysqladmin ping -h localhost -u root -p"$DB_ROOT_PASSWORD" --silent; then
+                  echo "MySQL is operational."
+                  break
+              fi
+              echo "Waiting for MySQL... ($i/30)"
+              sleep 2
+          done
+
+          echo "=== 4. ENSURING NGINX REVERSE PROXY ==="
+          mkdir -p /home/ec2-user/nginx-conf
+          if [ ! -f /home/ec2-user/nginx-conf/upstream.conf ]; then
+              echo "upstream app_backend { server devsecops-app-blue:5000; }" > /home/ec2-user/nginx-conf/upstream.conf
+          fi
+
+          cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
+          events { worker_connections 1024; }
+          http {
+              include /etc/nginx/conf.d/*.conf;
+              server {
+                  listen 80;
+                  location / {
+                      proxy_pass http://app_backend;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+              }
+          }
+          NGINX_EOF
+
+          if ! docker ps --filter "name=^/devsecops-nginx$" --filter "status=running" -q | grep -q .; then
+              docker stop devsecops-nginx 2>/dev/null || true
+              docker rm devsecops-nginx 2>/dev/null || true
+              docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 \
+                  -v /home/ec2-user/nginx-conf/nginx.conf:/etc/nginx/nginx.conf:ro \
+                  -v /home/ec2-user/nginx-conf/upstream.conf:/etc/nginx/conf.d/upstream.conf \
+                  nginx:alpine
+          fi
+
+          echo "=== 5. EXECUTING PRODUCTION BLUE/GREEN DEPLOYMENT SCRIPT ==="
+          export DB_PASSWORD="$DB_PASSWORD"
+          export DB_NAME="$DB_NAME"
+          export DB_USER="$DB_USER"
+          /home/ec2-user/scripts/deploy_blue_green.sh "__DEPLOY_IMAGE__"
+
+          echo "=== 6. ENSURING MONITORING SERVICES ==="
+          echo Z2xvYmFsOgogIHNjcmFwZV9pbnRlcnZhbDogMTVzCgpzY3JhcGVfY29uZmlnczoKICAtIGpvYl9uYW1lOiAiZGV2c2Vjb3BzLWFwcCIKICAgIHN0YXRpY19jb25maWdzOgogICAgICAtIHRhcmdldHM6IFsiZGV2c2Vjb3BzLW5naW54OjgwIl0K | base64 -d > /home/ec2-user/prometheus.yml
+          if ! docker ps --filter "name=^/devsecops-prometheus$" --filter "status=running" -q | grep -q .; then
+              docker volume create devsecops-prometheus-data 2>/dev/null || true
+              docker run -d --name devsecops-prometheus --network devsecops-network -p 9090:9090 \
+                  -v /home/ec2-user/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+                  -v devsecops-prometheus-data:/prometheus prom/prometheus:latest --config.file=/etc/prometheus/prometheus.yml
+          fi
+
           mkdir -p /home/ec2-user/grafana/provisioning/datasources /home/ec2-user/grafana/provisioning/dashboards /home/ec2-user/grafana/dashboards
           echo YXBpVmVyc2lvbjogMQoKZGF0YXNvdXJjZXM6CiAgLSBuYW1lOiBQcm9tZXRoZXVzCiAgICB0eXBlOiBwcm9tZXRoZXVzCiAgICBhY2Nlc3M6IHByb3h5CiAgICB1cmw6IGh0dHA6Ly9kZXZzZWNvcHMtcHJvbWV0aGV1czo5MDkwCiAgICBpc0RlZmF1bHQ6IHRydWUKICAgIGVkaXRhYmxlOiB0cnVlCiAgICB1aWQ6IHByb21ldGhldXMK | base64 -d > /home/ec2-user/grafana/provisioning/datasources/datasource.yml
           echo YXBpVmVyc2lvbjogMQoKcHJvdmlkZXJzOgogIC0gbmFtZTogJ0RldlNlY09wcyBEYXNoYm9hcmRzJwogICAgb3JnSWQ6IDEKICAgIGZvbGRlcjogJycKICAgIHR5cGU6IGZpbGUKICAgIGRpc2FibGVEZWxldGlvbjogZmFsc2UKICAgIHVwZGF0ZUludGVydmFsU2Vjb25kczogMTAKICAgIGFsbG93VWlVcGRhdGVzOiB0cnVlCiAgICBvcHRpb25zOgogICAgICBwYXRoOiAvdmFyL2xpYi9ncmFmYW5hL2Rhc2hib2FyZHMKICAgICAgZm9sZGVyc0Zyb21GaWxlc1N0cnVjdHVyZTogZmFsc2UK | base64 -d > /home/ec2-user/grafana/provisioning/dashboards/dashboard.yml
-          echo __DASHBOARD_B64__ | base64 -d > /home/ec2-user/grafana/dashboards/devsecops-dashboard.json
+          echo "__DASHBOARD_GZ_B64__" | base64 -d | gzip -d > /home/ec2-user/grafana/dashboards/devsecops-dashboard.json
           chmod -R 755 /home/ec2-user/grafana
-          docker stop devsecops-grafana || true
-          docker rm devsecops-grafana || true
-          docker volume create devsecops-grafana-data || true
-          docker run -d --name devsecops-grafana --network devsecops-network -p 3000:3000 -v devsecops-grafana-data:/var/lib/grafana -v /home/ec2-user/grafana/provisioning:/etc/grafana/provisioning:ro -v /home/ec2-user/grafana/dashboards:/var/lib/grafana/dashboards:ro grafana/grafana:latest
-          echo "=== STEP 9: HEALTH CHECKS ==="
-          sleep 15
-          docker ps --filter name=devsecops- --format '{{.Names}}'
-          HEALTH_OUTPUT=$(curl -sf http://localhost/health)
-          echo "$HEALTH_OUTPUT"
-          echo "$HEALTH_OUTPUT" | grep -q '"connected":true'
-          echo "$HEALTH_OUTPUT" | grep -q '"mode":"live_mysql"'
-          echo "$HEALTH_OUTPUT" | grep -q '"status":"healthy"'
-          docker exec devsecops-prometheus wget -qO- http://localhost:9090/api/v1/targets | grep -E 'devsecops-app:5000'
-          curl -f http://localhost:3000/api/health
+
+          if ! docker ps --filter "name=^/devsecops-grafana$" --filter "status=running" -q | grep -q .; then
+              docker volume create devsecops-grafana-data 2>/dev/null || true
+              docker run -d --name devsecops-grafana --network devsecops-network -p 3000:3000 \
+                  -v devsecops-grafana-data:/var/lib/grafana \
+                  -v /home/ec2-user/grafana/provisioning:/etc/grafana/provisioning:ro \
+                  -v /home/ec2-user/grafana/dashboards:/var/lib/grafana/dashboards:ro grafana/grafana:latest
+          fi
+
+          echo "=== 7. DEPLOYMENT FINISHED ON REMOTE HOST ==="
           EOF
-          
-          sed -i "s|__DEPLOY_SHA__|${{ github.sha }}|g" raw-commands.sh
-          DASHBOARD_BASE64=$(base64 -w 0 monitoring/grafana/dashboards/devsecops-dashboard.json)
-          sed -i "s|__DASHBOARD_B64__|$DASHBOARD_BASE64|" raw-commands.sh
-          
-          # Run the script via SSM by passing it natively as a single string
-          jq -R -s '{
-            "InstanceIds": ["i-0fb9dcbeb35b4fdbe"],
+
+          sed -i "s|__DEPLOY_IMAGE__|$DEPLOY_IMAGE|g" remote_wrapper.sh
+          sed -i "s|__AWS_ACCOUNT_ID__|$AWS_ACCOUNT_ID|g" remote_wrapper.sh
+          sed -i "s|__DEPLOY_SCRIPT_GZ_B64__|$DEPLOY_SCRIPT_GZ_B64|g" remote_wrapper.sh
+          sed -i "s|__DASHBOARD_GZ_B64__|$DASHBOARD_GZ_B64|g" remote_wrapper.sh
+
+          jq -R -s --arg inst "$TARGET_INSTANCE_ID" '{
+            "InstanceIds": [$inst],
             "DocumentName": "AWS-RunShellScript",
             "Parameters": {
               "commands": [.]
             }
-          }' raw-commands.sh > ssm_input.json
+          }' remote_wrapper.sh > ssm_payload.json
+
           COMMAND_ID=$(aws ssm send-command \
-            --cli-input-json file://ssm_input.json \
+            --cli-input-json file://ssm_payload.json \
             --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
@@ -222,145 +342,129 @@ jobs:
             exit 1
           fi
 
-          echo "SSM Command ID: $COMMAND_ID"
+          echo "Dispatched SSM Command ID: $COMMAND_ID on instance $TARGET_INSTANCE_ID"
 
-          MAX_WAIT=120
+          MAX_WAIT=180
           START_TIME=$(date +%s)
-          ELAPSED=0
           STATUS=""
           LOOKUP_ERRORS=0
 
-          while [ $ELAPSED -lt $MAX_WAIT ]; do
+          while [ $(( $(date +%s) - START_TIME )) -lt $MAX_WAIT ]; do
             STATUS=$(timeout 15 aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
-              --instance-id i-0fb9dcbeb35b4fdbe \
+              --instance-id "$TARGET_INSTANCE_ID" \
               --region ap-south-1 \
-              --cli-connect-timeout 5 \
-              --cli-read-timeout 10 \
               --query "Status" \
               --output text 2>/dev/null) || STATUS=""
 
-            NOW=$(date +%s)
-            ELAPSED=$((NOW - START_TIME))
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            echo "SSM Status (${ELAPSED}s elapsed): ${STATUS:-Waiting...}"
 
-            if [ $ELAPSED -ge $MAX_WAIT ]; then
-              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-                echo "SSM Execution Status (${ELAPSED}s elapsed): $STATUS"
-                break
-              elif [ "$STATUS" = "Success" ]; then
-                echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Received Success after deadline (${ELAPSED}s elapsed)." >&2
-                echo "The deployment exceeded the maximum allowed polling window of ${MAX_WAIT}s and cannot be accepted." >&2
-                echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
-                exit 1
-              else
-                echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Last reported status: ${STATUS:-unknown} (${ELAPSED}s elapsed)." >&2
-                echo "The remote command on EC2 may still be in progress, so its final deployment state is unknown." >&2
-                echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
-                exit 1
-              fi
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              break
             fi
-
-            if [ -z "$STATUS" ]; then
-              LOOKUP_ERRORS=$((LOOKUP_ERRORS + 1))
-              echo "Waiting for SSM invocation registration (${ELAPSED}s elapsed, attempt $LOOKUP_ERRORS/6)..."
-              if [ $LOOKUP_ERRORS -ge 6 ]; then
-                echo "SSM invocation lookup failed persistently after $LOOKUP_ERRORS consecutive attempts (${ELAPSED}s elapsed)" >&2
-                exit 1
-              fi
-            else
-              LOOKUP_ERRORS=0
-              echo "SSM Execution Status (${ELAPSED}s elapsed): $STATUS"
-              if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-                break
-              fi
-            fi
-
             sleep 5
-            NOW=$(date +%s)
-            ELAPSED=$((NOW - START_TIME))
           done
 
-          if [ "$ELAPSED" -ge "$MAX_WAIT" ] && [ "$STATUS" = "Success" ]; then
-            echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Received Success after deadline (${ELAPSED}s elapsed)." >&2
-            echo "The deployment exceeded the maximum allowed polling window of ${MAX_WAIT}s and cannot be accepted." >&2
-            echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
-            exit 1
-          fi
-
-          if [ "$STATUS" != "Success" ] && [ "$STATUS" != "Failed" ] && [ "$STATUS" != "TimedOut" ] && [ "$STATUS" != "Cancelled" ]; then
-            echo "ERROR: Deployment polling timed out after ${MAX_WAIT}s. Last reported status: ${STATUS:-unknown} (${ELAPSED}s elapsed)." >&2
-            echo "The remote command on EC2 may still be in progress, so its final deployment state is unknown." >&2
-            echo "Check SSM Command ID $COMMAND_ID in the AWS Systems Manager console or CLI before retrying." >&2
-            exit 1
-          fi
-
-          echo "Waiting for output to sync..."
-          sleep 10
-
-          RAW_JSON=$(timeout 15 aws ssm get-command-invocation \
+          echo "=== Retrieving Final SSM Output ==="
+          INVOCATION_JSON=$(aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
-            --instance-id i-0fb9dcbeb35b4fdbe \
+            --instance-id "$TARGET_INSTANCE_ID" \
             --region ap-south-1 \
-            --cli-connect-timeout 5 \
-            --cli-read-timeout 10 \
             --output json 2>/dev/null || true)
 
-          if [ -n "$RAW_JSON" ]; then
+          if [ -n "$INVOCATION_JSON" ]; then
             echo "=== SSM Standard Output ==="
-            echo "$RAW_JSON" | jq -r '.StandardOutputContent // empty' 2>/dev/null || echo "Unable to parse SSM standard output" >&2
-
-            STDERR=$(echo "$RAW_JSON" | jq -r '.StandardErrorContent // empty' 2>/dev/null || true)
+            echo "$INVOCATION_JSON" | jq -r '.StandardOutputContent // empty'
+            STDERR=$(echo "$INVOCATION_JSON" | jq -r '.StandardErrorContent // empty')
             if [ -n "$STDERR" ]; then
               echo "=== SSM Standard Error ==="
               echo "$STDERR"
             fi
-          else
-            echo "Warning: Unable to retrieve final SSM invocation JSON output" >&2
           fi
 
           if [ "$STATUS" != "Success" ]; then
-            echo "SSM command failed with status: $STATUS" >&2
+            echo "ERROR: SSM Command failed with final status: $STATUS" >&2
+            exit 1
+          fi
+          echo "SSM Blue/Green Deployment successfully executed."
+
+  # ============================================================================
+  # 4. VERIFY PRODUCTION (Independent external health check on public endpoint)
+  # ============================================================================
+  verify-production:
+    name: Verify Production Health
+    runs-on: ubuntu-latest
+    needs: [deploy-blue-green]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
+
+    steps:
+      - name: Configure AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Resolve public IP and verify health endpoint
+        run: |
+          echo "Resolving running EC2 instance with tags Project=devsecops-platform, Environment=production..."
+          INSTANCES=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=devsecops-platform" \
+                      "Name=tag:Environment,Values=production" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].InstanceId" \
+            --output text \
+            --region ap-south-1)
+
+          NUM_INSTANCES=$(echo "$INSTANCES" | wc -w)
+          if [ "$NUM_INSTANCES" -ne 1 ]; then
+            echo "ERROR: Expected exactly 1 running instance for verification, found $NUM_INSTANCES ($INSTANCES). Aborting." >&2
             exit 1
           fi
 
-      - name: Application health check
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          set +e
-          echo "Verifying production endpoint: http://13.232.174.161/health"
-          max_attempts=12
-          attempt=0
-          healthy=false
-          
-          while [ $attempt -lt $max_attempts ]; do
-            attempt=$((attempt + 1))
-            resp=$(curl -s --max-time 10 http://13.232.174.161/health || echo '{"error": "curl failed"}')
-            
-            status=$(echo "$resp" | jq -r '.status // empty')
-            db_connected=$(echo "$resp" | jq -r '.database.connected // empty')
-            db_mode=$(echo "$resp" | jq -r '.database.mode // empty')
-            
-            echo "Attempt $attempt health status: $status, database connected: $db_connected, mode: $db_mode"
-            
-            if [ "$status" = "healthy" ] && [ "$db_connected" = "true" ] && [ "$db_mode" = "live_mysql" ]; then
-              healthy=true
+          INSTANCE_ID=$(echo "$INSTANCES" | tr -d '[:space:]')
+          echo "Resolved unique target EC2 Instance ID: $INSTANCE_ID"
+
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text \
+            --region ap-south-1)
+
+          if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
+            echo "ERROR: Unable to resolve public IP for production EC2 instance ($INSTANCE_ID)." >&2
+            exit 1
+          fi
+
+          echo "Target Public IP: $PUBLIC_IP"
+          HEALTH_URL="http://${PUBLIC_IP}/health"
+          echo "Verifying production endpoint: $HEALTH_URL"
+
+          MAX_ATTEMPTS=12
+          ATTEMPT=0
+          HEALTHY=false
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            RESP=$(curl -s --max-time 10 "$HEALTH_URL" || echo '{"error": "curl failed"}')
+
+            STATUS=$(echo "$RESP" | jq -r '.status // empty')
+            DB_CONN=$(echo "$RESP" | jq -r '.database.connected // empty')
+            DB_MODE=$(echo "$RESP" | jq -r '.database.mode // empty')
+
+            echo "Attempt $ATTEMPT: status=$STATUS, db_connected=$DB_CONN, mode=$DB_MODE"
+
+            if [ "$STATUS" = "healthy" ] && [ "$DB_CONN" = "true" ] && [ "$DB_MODE" = "live_mysql" ]; then
+              HEALTHY=true
               echo "Production health check passed successfully!"
               break
             fi
-            
             sleep 5
           done
-          
-          if [ "$healthy" != "true" ]; then
-            echo "Production health check failed to confirm healthy status and live database connection."
+
+          if [ "$HEALTHY" != "true" ]; then
+            echo "ERROR: Production health check failed to confirm healthy status and live database connection." >&2
             exit 1
           fi
 
-          echo "Pipeline completed successfully!"
-          exit 0
-
-
-
-
-
-
+          echo "Production deployment and verification completed successfully!"

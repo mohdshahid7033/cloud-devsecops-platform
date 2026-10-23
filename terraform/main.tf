@@ -68,6 +68,14 @@ resource "aws_security_group" "devsecops_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -76,17 +84,43 @@ resource "aws_security_group" "devsecops_sg" {
   }
 
   tags = {
-    Name = "devsecops-security-group"
+    Name        = "devsecops-security-group"
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
+
 resource "aws_instance" "devsecops_ec2" {
   ami                    = var.ami_id
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.devsecops_subnet.id
   vpc_security_group_ids = [aws_security_group.devsecops_sg.id]
-  key_name               = "devsecops-key"
+  iam_instance_profile   = aws_iam_instance_profile.devsecops_ec2_profile.name
+  key_name               = var.key_name
+
+  # Root block device with gp3 and encryption
+  root_block_device {
+    volume_type           = "gp3"
+    volume_size           = 8
+    encrypted             = true
+    delete_on_termination = true
+    tags = {
+      Name = "devsecops-ec2-root-volume"
+    }
+  }
+
+  # Enforce IMDSv2 (Session Token Required) to protect against SSRF credential theft
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
 
   tags = {
-    Name = "devsecops-ec2"
+    Name        = "devsecops-ec2"
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }

@@ -16,3 +16,18 @@ ssm-commands.json
 test-ssm-commands.json
 ssm_input.json
 raw-commands.sh
+.env.*
+
+# Database & Backups
+backups/
+*.tar.gz
+*.sql
+
+# Security & Credentials
+*.pem
+*.key
+*.crt
+
+# Test Coverage
+.coverage
+htmlcov/
