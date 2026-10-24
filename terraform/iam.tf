@@ -229,19 +229,31 @@ data "aws_iam_policy_document" "github_actions_deployer_permissions" {
   }
 
   # 3. SSM Run Command dispatch and polling
+  # Document authorization (AWS-managed documents like AWS-RunShellScript do not possess customer tags)
   statement {
-    sid    = "SSMRunCommand"
+    sid    = "SSMRunCommandDocument"
     effect = "Allow"
     actions = [
       "ssm:SendCommand"
     ]
     resources = [
-      "arn:aws:ssm:${var.aws_region}::document/AWS-RunShellScript",
+      "arn:aws:ssm:${var.aws_region}::document/AWS-RunShellScript"
+    ]
+  }
+
+  # Tag-scoped EC2 target authorization for Run Command
+  statement {
+    sid    = "SSMRunCommandTaggedInstances"
+    effect = "Allow"
+    actions = [
+      "ssm:SendCommand"
+    ]
+    resources = [
       "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*"
     ]
     condition {
       test     = "StringEquals"
-      variable = "aws:ResourceTag/Project"
+      variable = "ssm:resourceTag/Project"
       values   = [var.project_name]
     }
   }
@@ -255,19 +267,6 @@ data "aws_iam_policy_document" "github_actions_deployer_permissions" {
       "ssm:ListCommands"
     ]
     resources = ["*"]
-  }
-
-  # 4. SSM Parameter Store configuration access
-  statement {
-    sid    = "SSMParameterRead"
-    effect = "Allow"
-    actions = [
-      "ssm:GetParameter",
-      "ssm:GetParameters"
-    ]
-    resources = [
-      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/devsecops/*"
-    ]
   }
 }
 
