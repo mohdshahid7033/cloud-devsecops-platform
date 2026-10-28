@@ -50,6 +50,8 @@ ACTIVE_CONTAINER=""
 CANDIDATE_SLOT=""
 ACTIVE_SLOT=""
 SWITCH_PERFORMED=false
+CANDIDATE_CREATED=false
+PRIOR_ROUTING_CONFIG=""
 
 DEPLOY_LOCK_PATH="${DEPLOY_LOCK_PATH:-/tmp/devsecops-deploy.lock}"
 LOCK_ACQUIRED=false
@@ -122,10 +124,22 @@ release_lock() {
 # ------------------------------------------------------------------------------
 cleanup_on_exit() {
     local exit_code=$?
-    if [ "$SWITCH_PERFORMED" = false ] && [ -n "$CANDIDATE_CONTAINER" ]; then
-        log_warn "Deployment terminated before switch. Cleaning up candidate container '$CANDIDATE_CONTAINER'..."
-        $DOCKER_CMD stop "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
-        $DOCKER_CMD rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+    if [ "$SWITCH_PERFORMED" = false ] && [ "$CANDIDATE_CREATED" = true ] && [ -n "$CANDIDATE_CONTAINER" ]; then
+        # Guard: Never remove active production container or core infra containers
+        if [ "$CANDIDATE_CONTAINER" != "$ACTIVE_CONTAINER" ] && \
+           [ "$CANDIDATE_CONTAINER" != "$NGINX_CONTAINER" ] && \
+           [ "$CANDIDATE_CONTAINER" != "devsecops-mysql" ]; then
+            # Verify candidate container is not in live upstream before stopping
+            local cur_up
+            cur_up=$($DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/conf.d/upstream.conf 2>/dev/null | sed -e 's/#.*//' || true)
+            if ! echo "$cur_up" | grep -E -q "^[[:space:]]*server[[:space:]]+${CANDIDATE_CONTAINER}(:[0-9]+)?;" ; then
+                log_warn "Deployment terminated before switch. Cleaning up candidate container '$CANDIDATE_CONTAINER'..."
+                $DOCKER_CMD stop "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+                $DOCKER_CMD rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+            else
+                log_warn "Candidate '$CANDIDATE_CONTAINER' appears in live upstream. Skipping removal to avoid disruption."
+            fi
+        fi
     fi
     release_lock
     exit "$exit_code"
@@ -154,47 +168,165 @@ if ! $DOCKER_CMD ps --filter "name=^/${NGINX_CONTAINER}$" --format '{{.Names}}' 
 fi
 
 UPSTREAM_CONF=$($DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/conf.d/upstream.conf 2>/dev/null || true)
+CLEAN_UPSTREAM=$(echo "$UPSTREAM_CONF" | sed -e 's/#.*//')
 
-HAS_BLUE=false
-HAS_GREEN=false
+if [ -n "$(echo "$CLEAN_UPSTREAM" | tr -d '[:space:]')" ]; then
+    HAS_BLUE=false
+    HAS_GREEN=false
+    HAS_LEGACY_DEVSECOPS=false
+    HAS_LEGACY_APP=false
 
-if echo "$UPSTREAM_CONF" | grep -q "$SLOT_BLUE"; then
-    HAS_BLUE=true
-fi
-if echo "$UPSTREAM_CONF" | grep -q "$SLOT_GREEN"; then
-    HAS_GREEN=true
-fi
+    # Parse recognized active upstream server directives strictly
+    if echo "$CLEAN_UPSTREAM" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app-blue(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        HAS_BLUE=true
+    fi
+    if echo "$CLEAN_UPSTREAM" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app-green(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        HAS_GREEN=true
+    fi
+    if echo "$CLEAN_UPSTREAM" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        HAS_LEGACY_DEVSECOPS=true
+    fi
+    if echo "$CLEAN_UPSTREAM" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+app(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        HAS_LEGACY_APP=true
+    fi
 
-if [ "$HAS_BLUE" = true ] && [ "$HAS_GREEN" = true ]; then
-    log_error "Ambiguous upstream configuration: both '$SLOT_BLUE' and '$SLOT_GREEN' found in /etc/nginx/conf.d/upstream.conf."
-    log_error "Aborting deployment to avoid split-brain or unintended routing state."
-    exit 1
-elif [ "$HAS_BLUE" = true ]; then
-    ACTIVE_SLOT="blue"
-    ACTIVE_CONTAINER="$SLOT_BLUE"
-    CANDIDATE_SLOT="green"
-    CANDIDATE_CONTAINER="$SLOT_GREEN"
-elif [ "$HAS_GREEN" = true ]; then
-    ACTIVE_SLOT="green"
-    ACTIVE_CONTAINER="$SLOT_GREEN"
-    CANDIDATE_SLOT="blue"
-    CANDIDATE_CONTAINER="$SLOT_BLUE"
-else
-    # Check for bootstrap state (e.g. legacy single devsecops-app or fresh setup)
-    if echo "$UPSTREAM_CONF" | grep -q "devsecops-app"; then
-        log_info "Detected legacy single container 'devsecops-app'. Bootstrapping initial blue slot '$SLOT_BLUE'."
+    UPSTREAM_MATCHES=0
+    [ "$HAS_BLUE" = true ] && UPSTREAM_MATCHES=$((UPSTREAM_MATCHES + 1))
+    [ "$HAS_GREEN" = true ] && UPSTREAM_MATCHES=$((UPSTREAM_MATCHES + 1))
+    [ "$HAS_LEGACY_DEVSECOPS" = true ] && UPSTREAM_MATCHES=$((UPSTREAM_MATCHES + 1))
+    [ "$HAS_LEGACY_APP" = true ] && UPSTREAM_MATCHES=$((UPSTREAM_MATCHES + 1))
+
+    if [ "$UPSTREAM_MATCHES" -gt 1 ]; then
+        if [ "$HAS_BLUE" = true ] && [ "$HAS_GREEN" = true ]; then
+            log_error "Ambiguous upstream configuration: both '$SLOT_BLUE' and '$SLOT_GREEN' found in /etc/nginx/conf.d/upstream.conf."
+        else
+            log_error "Ambiguous upstream configuration: multiple active backend server directives found in /etc/nginx/conf.d/upstream.conf."
+        fi
+        log_error "Aborting deployment to avoid split-brain or unintended routing state."
+        exit 1
+    elif [ "$HAS_BLUE" = true ]; then
+        ACTIVE_SLOT="blue"
+        ACTIVE_CONTAINER="$SLOT_BLUE"
+        CANDIDATE_SLOT="green"
+        CANDIDATE_CONTAINER="$SLOT_GREEN"
+        PRIOR_ROUTING_CONFIG="$UPSTREAM_CONF"
+    elif [ "$HAS_GREEN" = true ]; then
+        ACTIVE_SLOT="green"
+        ACTIVE_CONTAINER="$SLOT_GREEN"
+        CANDIDATE_SLOT="blue"
+        CANDIDATE_CONTAINER="$SLOT_BLUE"
+        PRIOR_ROUTING_CONFIG="$UPSTREAM_CONF"
+    elif [ "$HAS_LEGACY_DEVSECOPS" = true ]; then
+        log_info "Detected legacy single container 'devsecops-app' in modular upstream."
         ACTIVE_SLOT="legacy"
         ACTIVE_CONTAINER="devsecops-app"
         CANDIDATE_SLOT="blue"
         CANDIDATE_CONTAINER="$SLOT_BLUE"
-    elif [ -z "$UPSTREAM_CONF" ]; then
-        log_info "Empty or missing upstream.conf. Bootstrapping initial active slot '$SLOT_BLUE'."
-        ACTIVE_SLOT="none"
-        ACTIVE_CONTAINER=""
+        PRIOR_ROUTING_CONFIG="$UPSTREAM_CONF"
+    elif [ "$HAS_LEGACY_APP" = true ]; then
+        log_info "Detected legacy alias 'app' in modular upstream."
+        ACTIVE_SLOT="legacy"
+        ACTIVE_CONTAINER="devsecops-app"
         CANDIDATE_SLOT="blue"
         CANDIDATE_CONTAINER="$SLOT_BLUE"
+        PRIOR_ROUTING_CONFIG="$UPSTREAM_CONF"
     else
         log_error "Unknown active upstream configuration in /etc/nginx/conf.d/upstream.conf: '$UPSTREAM_CONF'"
+        exit 1
+    fi
+else
+    # /etc/nginx/conf.d/upstream.conf is missing or empty.
+    # Inspect the actual running Nginx configuration to determine the active production route.
+    log_info "No modular /etc/nginx/conf.d/upstream.conf found. Inspecting active runtime Nginx configuration..."
+    NGINX_ACTIVE_CONF=$($DOCKER_CMD exec "$NGINX_CONTAINER" nginx -T 2>/dev/null || $DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/nginx.conf 2>/dev/null || true)
+    CLEAN_RUNTIME_CONF=$(echo "$NGINX_ACTIVE_CONF" | sed -e 's/#.*//')
+
+    RT_BLUE=false
+    RT_GREEN=false
+    RT_LEGACY_DEVSECOPS=false
+    RT_LEGACY_APP=false
+
+    # Check active server directives (inside upstream blocks)
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app-blue(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        RT_BLUE=true
+    fi
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app-green(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        RT_GREEN=true
+    fi
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        RT_LEGACY_DEVSECOPS=true
+    fi
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+app(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+        RT_LEGACY_APP=true
+    fi
+
+    # Check direct proxy_pass directives (outside upstream blocks)
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://devsecops-app-blue(:[0-9]+)?/?;'; then
+        RT_BLUE=true
+    fi
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://devsecops-app-green(:[0-9]+)?/?;'; then
+        RT_GREEN=true
+    fi
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://devsecops-app(:[0-9]+)?/?;'; then
+        RT_LEGACY_DEVSECOPS=true
+    fi
+    if echo "$CLEAN_RUNTIME_CONF" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://app(:[0-9]+)?/?;'; then
+        RT_LEGACY_APP=true
+    fi
+
+    RT_MATCH_COUNT=0
+    [ "$RT_BLUE" = true ] && RT_MATCH_COUNT=$((RT_MATCH_COUNT + 1))
+    [ "$RT_GREEN" = true ] && RT_MATCH_COUNT=$((RT_MATCH_COUNT + 1))
+    [ "$RT_LEGACY_DEVSECOPS" = true ] && RT_MATCH_COUNT=$((RT_MATCH_COUNT + 1))
+    [ "$RT_LEGACY_APP" = true ] && RT_MATCH_COUNT=$((RT_MATCH_COUNT + 1))
+
+    if [ "$RT_MATCH_COUNT" -gt 1 ]; then
+        log_error "Ambiguous active production route detected across Nginx runtime configuration ($RT_MATCH_COUNT conflicting matches found)."
+        log_error "Aborting deployment to avoid split-brain or unintended routing state."
+        exit 1
+    elif [ "$RT_BLUE" = true ]; then
+        log_info "Discovered active blue slot route in Nginx runtime configuration."
+        ACTIVE_SLOT="blue"
+        ACTIVE_CONTAINER="$SLOT_BLUE"
+        CANDIDATE_SLOT="green"
+        CANDIDATE_CONTAINER="$SLOT_GREEN"
+        PRIOR_ROUTING_CONFIG="upstream app_backend {
+    server ${SLOT_BLUE}:${APP_PORT};
+}
+"
+    elif [ "$RT_GREEN" = true ]; then
+        log_info "Discovered active green slot route in Nginx runtime configuration."
+        ACTIVE_SLOT="green"
+        ACTIVE_CONTAINER="$SLOT_GREEN"
+        CANDIDATE_SLOT="blue"
+        CANDIDATE_CONTAINER="$SLOT_BLUE"
+        PRIOR_ROUTING_CONFIG="upstream app_backend {
+    server ${SLOT_GREEN}:${APP_PORT};
+}
+"
+    elif [ "$RT_LEGACY_DEVSECOPS" = true ]; then
+        log_info "Discovered legacy active container route ('devsecops-app') in Nginx runtime configuration."
+        ACTIVE_SLOT="legacy"
+        ACTIVE_CONTAINER="devsecops-app"
+        CANDIDATE_SLOT="blue"
+        CANDIDATE_CONTAINER="$SLOT_BLUE"
+        PRIOR_ROUTING_CONFIG="upstream app_backend {
+    server devsecops-app:${APP_PORT};
+}
+"
+    elif [ "$RT_LEGACY_APP" = true ]; then
+        log_info "Discovered legacy active container route ('app') in Nginx runtime configuration."
+        ACTIVE_SLOT="legacy"
+        ACTIVE_CONTAINER="devsecops-app"
+        CANDIDATE_SLOT="blue"
+        CANDIDATE_CONTAINER="$SLOT_BLUE"
+        PRIOR_ROUTING_CONFIG="upstream app_backend {
+    server app:${APP_PORT};
+}
+"
+    else
+        log_error "Unable to unambiguously identify active production route from Nginx configuration."
+        log_error "Aborting deployment before modifying any routing or container state."
         exit 1
     fi
 fi
@@ -256,6 +388,24 @@ if ! $DOCKER_CMD pull "$DEPLOY_IMAGE"; then
 fi
 
 log_info "Preparing candidate slot container '$CANDIDATE_CONTAINER'..."
+if [ "$CANDIDATE_CONTAINER" = "$ACTIVE_CONTAINER" ]; then
+    log_error "Safety check failure: Candidate container '$CANDIDATE_CONTAINER' matches active container! Aborting."
+    exit 1
+fi
+if [ "$CANDIDATE_CONTAINER" = "$NGINX_CONTAINER" ] || [ "$CANDIDATE_CONTAINER" = "devsecops-mysql" ]; then
+    log_error "Safety check failure: Candidate container cannot be core infrastructure '$CANDIDATE_CONTAINER'! Aborting."
+    exit 1
+fi
+
+# Pre-stop protection: Verify candidate is NOT actively receiving production traffic right now!
+LIVE_CHECK_CONF=$($DOCKER_CMD exec "$NGINX_CONTAINER" nginx -T 2>/dev/null || $DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/nginx.conf 2>/dev/null || true)
+LIVE_CLEAN_CHECK=$(echo "$LIVE_CHECK_CONF" | sed -e 's/#.*//')
+if echo "$LIVE_CLEAN_CHECK" | grep -E -q "(^|[[:space:];{}])(server|proxy_pass)[[:space:]]+(http://)?${CANDIDATE_CONTAINER}(:[0-9]+)?([[:space:]]+[^;]*)?;"; then
+    log_error "CRITICAL SAFETY VIOLATION: Candidate container '$CANDIDATE_CONTAINER' is actively referenced in Nginx live routing!"
+    log_error "Aborting immediately without stopping or removing '$CANDIDATE_CONTAINER' to protect production traffic."
+    exit 1
+fi
+
 $DOCKER_CMD stop "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
 $DOCKER_CMD rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
 
@@ -276,6 +426,7 @@ if ! $DOCKER_CMD run -d \
     log_error "Failed to start candidate container '$CANDIDATE_CONTAINER'. Active slot '$ACTIVE_CONTAINER' remains untouched."
     exit 1
 fi
+CANDIDATE_CREATED=true
 
 # ------------------------------------------------------------------------------
 # 5. Candidate Bridge-Network Health & Database Connectivity Verification
@@ -384,7 +535,7 @@ perform_rollback() {
     local reason="$1"
     log_error "TRIGGERING AUTOMATED ROLLBACK: $reason"
 
-    if $DOCKER_CMD exec "$NGINX_CONTAINER" test -f /etc/nginx/upstream.conf.previous; then
+    if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous; then
         log_info "Restoring known-good configuration from /etc/nginx/upstream.conf.previous..."
         $DOCKER_CMD exec "$NGINX_CONTAINER" cp /etc/nginx/upstream.conf.previous /etc/nginx/conf.d/upstream.conf
 
@@ -408,7 +559,7 @@ perform_rollback() {
             exit 2
         fi
     else
-        log_error "CRITICAL: No previous upstream configuration backup found (/etc/nginx/upstream.conf.previous)!"
+        log_error "CRITICAL: No non-empty previous upstream configuration backup found (/etc/nginx/upstream.conf.previous)!"
         exit 2
     fi
 
@@ -424,11 +575,26 @@ perform_rollback() {
 # ------------------------------------------------------------------------------
 # 8. Save Known-Good Backup and Execute Atomic Traffic Switch
 # ------------------------------------------------------------------------------
-log_info "Backing up active upstream to /etc/nginx/upstream.conf.previous..."
-$DOCKER_CMD exec "$NGINX_CONTAINER" cp /etc/nginx/conf.d/upstream.conf /etc/nginx/upstream.conf.previous
+if [ -z "$PRIOR_ROUTING_CONFIG" ]; then
+    log_error "No verified prior routing configuration available for rollback. Refusing traffic cutover."
+    exit 1
+fi
+
+if ! echo "$PRIOR_ROUTING_CONFIG" | grep -E -q 'server[[:space:]]+[a-zA-Z0-9_-]+(:[0-9]+)?;' ; then
+    log_error "Prior routing configuration lacks valid upstream server definition. Refusing cutover."
+    exit 1
+fi
+
+log_info "Preserving verified prior routing configuration to /etc/nginx/upstream.conf.previous..."
+printf "%b" "$PRIOR_ROUTING_CONFIG" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/upstream.conf.previous"
+
+if ! $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous; then
+    log_error "Failed to verify /etc/nginx/upstream.conf.previous backup inside reverse proxy. Refusing cutover."
+    exit 1
+fi
 
 log_info "Writing candidate upstream to /etc/nginx/conf.d/upstream.conf..."
-printf "%s" "$CANDIDATE_UPSTREAM_CONTENT" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/conf.d/upstream.conf"
+printf "%b" "$CANDIDATE_UPSTREAM_CONTENT" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/conf.d/upstream.conf"
 
 log_info "Executing atomic traffic switch (nginx -s reload)..."
 SWITCH_PERFORMED=true
