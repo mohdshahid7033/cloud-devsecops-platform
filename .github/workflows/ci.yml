@@ -257,11 +257,160 @@ jobs:
 
           echo "=== 4. ENSURING NGINX REVERSE PROXY ==="
           mkdir -p /home/ec2-user/nginx-conf
-          if [ ! -f /home/ec2-user/nginx-conf/upstream.conf ]; then
-              echo "upstream app_backend { server devsecops-app-blue:5000; }" > /home/ec2-user/nginx-conf/upstream.conf
+
+          # Backup existing host nginx-conf files before any inspection or modification
+          if [ -f /home/ec2-user/nginx-conf/nginx.conf ]; then
+              cp /home/ec2-user/nginx-conf/nginx.conf /home/ec2-user/nginx-conf/nginx.conf.bak 2>/dev/null || true
+          fi
+          if [ -f /home/ec2-user/nginx-conf/upstream.conf ]; then
+              cp /home/ec2-user/nginx-conf/upstream.conf /home/ec2-user/nginx-conf/upstream.conf.bak 2>/dev/null || true
           fi
 
-          cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
+          NGINX_RUNNING=false
+          if docker ps --filter "name=^/devsecops-nginx$" --filter "status=running" -q | grep -q .; then
+              NGINX_RUNNING=true
+          fi
+
+          # Inspect running Nginx configuration to discover the active route without green-first bias
+          CURRENT_ROUTE=""
+          if [ "$NGINX_RUNNING" = true ]; then
+              NGINX_DUMP=$(docker exec devsecops-nginx nginx -T 2>/dev/null || docker exec devsecops-nginx cat /etc/nginx/nginx.conf 2>/dev/null || true)
+              CLEAN_DUMP=$(echo "$NGINX_DUMP" | sed -e 's/#.*//')
+
+              FOUND_BLUE=false
+              FOUND_GREEN=false
+              FOUND_DEVSECOPS=false
+              FOUND_APP=false
+
+              # Check active server directives (inside upstream blocks)
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app-blue(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+                  FOUND_BLUE=true
+              fi
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app-green(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+                  FOUND_GREEN=true
+              fi
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+devsecops-app(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+                  FOUND_DEVSECOPS=true
+              fi
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])server[[:space:]]+app(:[0-9]+)?([[:space:]]+[^;]*)?;'; then
+                  FOUND_APP=true
+              fi
+
+              # Check direct proxy_pass directives (outside upstream blocks)
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://devsecops-app-blue(:[0-9]+)?/?;'; then
+                  FOUND_BLUE=true
+              fi
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://devsecops-app-green(:[0-9]+)?/?;'; then
+                  FOUND_GREEN=true
+              fi
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://devsecops-app(:[0-9]+)?/?;'; then
+                  FOUND_DEVSECOPS=true
+              fi
+              if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http://app(:[0-9]+)?/?;'; then
+                  FOUND_APP=true
+              fi
+
+              DUMP_MATCHES=0
+              [ "$FOUND_BLUE" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
+              [ "$FOUND_GREEN" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
+              [ "$FOUND_DEVSECOPS" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
+              [ "$FOUND_APP" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
+
+              if [ "$DUMP_MATCHES" -gt 1 ]; then
+                  echo "CRITICAL: Ambiguous active routes detected in Nginx configuration ($DUMP_MATCHES conflicting matches). Aborting."
+                  exit 1
+              elif [ "$FOUND_BLUE" = true ]; then
+                  CURRENT_ROUTE="devsecops-app-blue"
+              elif [ "$FOUND_GREEN" = true ]; then
+                  CURRENT_ROUTE="devsecops-app-green"
+              elif [ "$FOUND_DEVSECOPS" = true ]; then
+                  CURRENT_ROUTE="devsecops-app"
+              elif [ "$FOUND_APP" = true ]; then
+                  CURRENT_ROUTE="app"
+              else
+                  echo "CRITICAL: Nginx is running but active production route could not be unambiguously identified. Aborting."
+                  exit 1
+              fi
+          fi
+
+          # Determine the active upstream target (preserve discovered route, default to blue only on fresh install)
+          ACTIVE_TARGET="${CURRENT_ROUTE:-devsecops-app-blue}"
+          echo "Discovered active Nginx backend target: $ACTIVE_TARGET"
+
+          # Verify Docker bind mount consistency using docker inspect
+          NGINX_MOUNTS_VALID=false
+          CONFIGS_CONSISTENT=false
+          if [ "$NGINX_RUNNING" = true ]; then
+              UPSTREAM_SRC=$(docker inspect devsecops-nginx --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d/upstream.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+              CONF_SRC=$(docker inspect devsecops-nginx --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/nginx.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+
+              if [ "$UPSTREAM_SRC" = "/home/ec2-user/nginx-conf/upstream.conf" ] && \
+                 [ "$CONF_SRC" = "/home/ec2-user/nginx-conf/nginx.conf" ]; then
+                  NGINX_MOUNTS_VALID=true
+              fi
+
+              # Verify host and container configuration content consistency
+              if [ "$NGINX_MOUNTS_VALID" = true ] && \
+                 [ -s /home/ec2-user/nginx-conf/upstream.conf ] && \
+                 docker exec devsecops-nginx test -s /etc/nginx/conf.d/upstream.conf 2>/dev/null; then
+                  HOST_MD5=$(md5sum /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null | awk '{print $1}')
+                  CONT_MD5=$(docker exec devsecops-nginx md5sum /etc/nginx/conf.d/upstream.conf 2>/dev/null | awk '{print $1}')
+                  if [ -n "$HOST_MD5" ] && [ "$HOST_MD5" = "$CONT_MD5" ]; then
+                      CONFIGS_CONSISTENT=true
+                  fi
+              fi
+          fi
+
+          # Re-provision Nginx if not running, mounts are invalid, or host/container configs are inconsistent
+          if [ "$NGINX_RUNNING" != true ] || [ "$NGINX_MOUNTS_VALID" != true ] || [ "$CONFIGS_CONSISTENT" != true ]; then
+              echo "Provisioning devsecops-nginx with verified modular mounts (routing to ${ACTIVE_TARGET}:5000)..."
+
+              # 1. If Nginx is running, preserve original running container configuration
+              ORIGINAL_PRESERVED=false
+              if [ "$NGINX_RUNNING" = true ]; then
+                  mkdir -p /home/ec2-user/nginx-conf/backup
+                  rm -f /home/ec2-user/nginx-conf/backup/* 2>/dev/null || true
+
+                  # Backup running configuration from inside the container (monolithic or previous)
+                  docker cp devsecops-nginx:/etc/nginx/nginx.conf /home/ec2-user/nginx-conf/backup/nginx.conf.orig 2>/dev/null || true
+                  docker cp devsecops-nginx:/etc/nginx/conf.d/upstream.conf /home/ec2-user/nginx-conf/backup/upstream.conf.orig 2>/dev/null || true
+
+                  # Fallback to host backups if container cp failed to obtain them
+                  if [ ! -s /home/ec2-user/nginx-conf/backup/nginx.conf.orig ] && [ -s /home/ec2-user/nginx-conf/nginx.conf.bak ]; then
+                      cp /home/ec2-user/nginx-conf/nginx.conf.bak /home/ec2-user/nginx-conf/backup/nginx.conf.orig 2>/dev/null || true
+                  fi
+                  if [ ! -s /home/ec2-user/nginx-conf/backup/upstream.conf.orig ] && [ -s /home/ec2-user/nginx-conf/upstream.conf.bak ]; then
+                      cp /home/ec2-user/nginx-conf/upstream.conf.bak /home/ec2-user/nginx-conf/backup/upstream.conf.orig 2>/dev/null || true
+                  fi
+
+                  # Verify the backup exists and is non-empty before touching host configuration
+                  BACKUP_VALID=false
+                  if [ -s /home/ec2-user/nginx-conf/backup/nginx.conf.orig ]; then
+                      BACKUP_VALID=true
+                  fi
+
+                  # If container had upstream.conf, verify upstream backup is also present and non-empty
+                  if docker exec devsecops-nginx test -s /etc/nginx/conf.d/upstream.conf 2>/dev/null; then
+                      if [ ! -s /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                          BACKUP_VALID=false
+                      fi
+                  elif [ -s /home/ec2-user/nginx-conf/upstream.conf.bak ]; then
+                      if [ ! -s /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                          BACKUP_VALID=false
+                      fi
+                  fi
+
+                  if [ "$BACKUP_VALID" != true ]; then
+                      echo "CRITICAL: Failed to preserve non-empty original Nginx configuration backup from running container. Aborting before disruption." >&2
+                      exit 1
+                  fi
+                  echo "Successfully preserved verified original Nginx configuration backup."
+              fi
+
+              # 2. Prepare new modular configuration files on host
+              echo "upstream app_backend { server ${ACTIVE_TARGET}:5000; }" > /home/ec2-user/nginx-conf/upstream.conf
+
+              cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
           events { worker_connections 1024; }
           http {
               include /etc/nginx/conf.d/*.conf;
@@ -277,13 +426,136 @@ jobs:
           }
           NGINX_EOF
 
-          if ! docker ps --filter "name=^/devsecops-nginx$" --filter "status=running" -q | grep -q .; then
-              docker stop devsecops-nginx 2>/dev/null || true
-              docker rm devsecops-nginx 2>/dev/null || true
-              docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 \
+              # 3. Pre-flight validate generated configuration syntax BEFORE disrupting running container
+              if ! docker run --rm \
+                  -v /home/ec2-user/nginx-conf/nginx.conf:/etc/nginx/nginx.conf:ro \
+                  -v /home/ec2-user/nginx-conf/upstream.conf:/etc/nginx/conf.d/upstream.conf:ro \
+                  nginx:alpine nginx -t >/dev/null 2>&1; then
+                  echo "CRITICAL: Generated Nginx configuration failed pre-flight syntax check. Aborting before disrupting service." >&2
+                  # Restore both host files from backup if available
+                  if [ -f /home/ec2-user/nginx-conf/backup/nginx.conf.orig ]; then
+                      cp /home/ec2-user/nginx-conf/backup/nginx.conf.orig /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null || true
+                  fi
+                  if [ -f /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                      cp /home/ec2-user/nginx-conf/backup/upstream.conf.orig /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                  else
+                      rm -f /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                  fi
+                  exit 1
+              fi
+              echo "Generated Nginx configuration passed pre-flight syntax validation."
+
+              # 4. If running, preserve container identity by renaming (verify each operation succeeds)
+              if [ "$NGINX_RUNNING" = true ]; then
+                  if ! docker rename devsecops-nginx devsecops-nginx-original; then
+                      echo "CRITICAL: Failed to rename devsecops-nginx to devsecops-nginx-original. Aborting without disrupting service." >&2
+                      if [ -f /home/ec2-user/nginx-conf/backup/nginx.conf.orig ]; then
+                          cp /home/ec2-user/nginx-conf/backup/nginx.conf.orig /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null || true
+                      fi
+                      if [ -f /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                          cp /home/ec2-user/nginx-conf/backup/upstream.conf.orig /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                      else
+                          rm -f /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                      fi
+                      exit 1
+                  fi
+
+                  if ! docker stop devsecops-nginx-original; then
+                      echo "CRITICAL: Failed to stop devsecops-nginx-original. Restoring original container name and aborting." >&2
+                      docker rename devsecops-nginx-original devsecops-nginx 2>/dev/null || true
+                      if [ -f /home/ec2-user/nginx-conf/backup/nginx.conf.orig ]; then
+                          cp /home/ec2-user/nginx-conf/backup/nginx.conf.orig /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null || true
+                      fi
+                      if [ -f /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                          cp /home/ec2-user/nginx-conf/backup/upstream.conf.orig /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                      else
+                          rm -f /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                      fi
+                      exit 1
+                  fi
+
+                  ORIGINAL_PRESERVED=true
+              fi
+
+              # 5. Start replacement container with modular mounts
+              REPLACEMENT_STARTED=false
+              if docker run -d --name devsecops-nginx --network devsecops-network --restart always -p 80:80 \
                   -v /home/ec2-user/nginx-conf/nginx.conf:/etc/nginx/nginx.conf:ro \
                   -v /home/ec2-user/nginx-conf/upstream.conf:/etc/nginx/conf.d/upstream.conf \
-                  nginx:alpine
+                  nginx:alpine >/dev/null 2>&1; then
+                  REPLACEMENT_STARTED=true
+              fi
+
+              # 6. Verify replacement container health
+              REPLACEMENT_HEALTHY=false
+              if [ "$REPLACEMENT_STARTED" = true ]; then
+                  sleep 2
+                  if docker ps --filter "name=^/devsecops-nginx$" --filter "status=running" -q | grep -q .; then
+                      if docker exec devsecops-nginx nginx -t >/dev/null 2>&1; then
+                          REPLACEMENT_HEALTHY=true
+                      fi
+                  fi
+              fi
+
+              # 7. Recovery if replacement failed
+              if [ "$REPLACEMENT_HEALTHY" != true ]; then
+                  echo "CRITICAL: Replacement devsecops-nginx failed startup or health verification! Initiating rollback..." >&2
+                  docker stop devsecops-nginx 2>/dev/null || true
+                  docker rm -f devsecops-nginx 2>/dev/null || true
+
+                  if [ "$ORIGINAL_PRESERVED" = true ]; then
+                      # Restore both host files from backup
+                      RESTORE_SUCCESS=true
+                      if [ -f /home/ec2-user/nginx-conf/backup/nginx.conf.orig ]; then
+                          if ! cp /home/ec2-user/nginx-conf/backup/nginx.conf.orig /home/ec2-user/nginx-conf/nginx.conf; then
+                              RESTORE_SUCCESS=false
+                          fi
+                      fi
+                      if [ -f /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                          if ! cp /home/ec2-user/nginx-conf/backup/upstream.conf.orig /home/ec2-user/nginx-conf/upstream.conf; then
+                              RESTORE_SUCCESS=false
+                          fi
+                      else
+                          rm -f /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+                      fi
+
+                      # Restore and start original container
+                      docker rename devsecops-nginx-original devsecops-nginx 2>/dev/null || true
+                      docker start devsecops-nginx 2>/dev/null || true
+
+                      CONTAINER_RUNNING=false
+                      if docker ps --filter "name=^/devsecops-nginx$" --filter "status=running" -q | grep -q .; then
+                          CONTAINER_RUNNING=true
+                      fi
+
+                      CONFIG_VERIFIED=true
+                      if [ -f /home/ec2-user/nginx-conf/backup/nginx.conf.orig ]; then
+                          if ! cmp -s /home/ec2-user/nginx-conf/backup/nginx.conf.orig /home/ec2-user/nginx-conf/nginx.conf; then
+                              CONFIG_VERIFIED=false
+                          fi
+                      fi
+                      if [ -f /home/ec2-user/nginx-conf/backup/upstream.conf.orig ]; then
+                          if ! cmp -s /home/ec2-user/nginx-conf/backup/upstream.conf.orig /home/ec2-user/nginx-conf/upstream.conf; then
+                              CONFIG_VERIFIED=false
+                          fi
+                      fi
+
+                      if [ "$CONTAINER_RUNNING" = true ] && [ "$CONFIG_VERIFIED" = true ] && [ "$RESTORE_SUCCESS" = true ]; then
+                          echo "RECOVERY VERIFIED: Original Nginx service successfully restored and operational."
+                      else
+                          echo "CRITICAL: Rollback failed! Original Nginx container or configuration could not be verified. Manual intervention required!" >&2
+                      fi
+                  fi
+                  exit 1
+              fi
+
+              # 8. Success: original container is only removed after replacement is verified healthy
+              if [ "$ORIGINAL_PRESERVED" = true ]; then
+                  docker rm -f devsecops-nginx-original 2>/dev/null || true
+              fi
+              echo "devsecops-nginx migration successfully verified and operational with modular mounts."
+          else
+              echo "devsecops-nginx is already running with verified, consistent modular upstream mounts."
           fi
 
           echo "=== 5. EXECUTING PRODUCTION BLUE/GREEN DEPLOYMENT SCRIPT ==="
