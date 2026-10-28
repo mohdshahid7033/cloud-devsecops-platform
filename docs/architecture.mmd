@@ -34,7 +34,7 @@ flowchart LR
         GH --> S1["1. Checkout Source<br/>actions/checkout@v4"]
         S1 --> S2["2. Check Python<br/>actions/setup-python@v5 (3.12)"]
         S2 --> S3["3. Install Dependencies<br/>pip install requirements, pytest, awscli"]
-        S3 --> S4["4. Run Tests (Pytest)<br/>34 Unit & Integration Tests (Blocking)"]
+        S3 --> S4["4. Run Tests (Pytest)<br/>84 Unit, Platform & Deployment Tests (Blocking)"]
 
         subgraph QUALITY_SEC["Code Quality & Vulnerability Scanning"]
             direction TB
@@ -44,11 +44,12 @@ flowchart LR
             S7 --> S8["8. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
         end
 
-        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4"]
+        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4 (OIDC)"]
         S9 --> S10["10. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
-        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest"]
-        S11 --> S12["12. Deploy to EC2 via SSM<br/>AWS-RunShellScript (Zero-SSH)"]
-        S12 --> S13["13. Application Health Check<br/>curl /health (HTTP Validation)"]
+        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest & :SHA"]
+        S11 --> S12["12. Blue/Green Deploy via SSM<br/>Zero-Downtime Traffic Switch (Zero-SSH)"]
+        S13["13. Application Health Check<br/>curl /health (Independent Verification)"]
+        S12 --> S13
     end
 
     %% AREA 3: AWS Production
@@ -61,7 +62,7 @@ flowchart LR
         subgraph VPC["AWS VPC (10.0.0.0/16) - Subnet (10.0.1.0/24)"]
             direction TB
 
-            subgraph EC2["EC2 Instance (t3.micro - Amazon Linux 2)"]
+            subgraph EC2["EC2 Instance (t3.micro - Amazon Linux 2023)"]
                 direction TB
 
                 SSM_AGENT["SSM Agent<br/>Executes Deployment Script"]
@@ -69,21 +70,24 @@ flowchart LR
                 subgraph CONTAINERS["Docker Containers (devsecops-network)"]
                     direction TB
 
-                    P_NGINX["Nginx:alpine<br/>Reverse Proxy :80"]
-                    P_APP["Flask Application<br/>devsecops-platform:latest :5000"]
+                    P_NGINX["Nginx:alpine<br/>Upstream Reverse Proxy :80"]
+                    P_BLUE["Flask Blue Slot<br/>devsecops-app-blue :5001"]
+                    P_GREEN["Flask Green Slot<br/>devsecops-app-green :5002"]
                     P_MYSQL["MySQL 8.0 Container<br/>devsecops_db :3306 (Persistent Volume)"]
                     P_PROM["Prometheus Container<br/>Metrics Scraper :9090"]
                     P_GRAFANA["Grafana Container<br/>Dashboards :3000"]
 
-                    P_NGINX -->|proxy_pass :5000| P_APP
-                    P_APP -->|TCP :3306| P_MYSQL
-                    P_PROM -->|Scrapes /metrics| P_APP
+                    P_NGINX -->|upstream app_backend| P_BLUE
+                    P_NGINX -.->|zero-downtime cutover| P_GREEN
+                    P_BLUE -->|TCP :3306| P_MYSQL
+                    P_GREEN -->|TCP :3306| P_MYSQL
+                    P_PROM -->|Scrapes /metrics| P_NGINX
                     P_GRAFANA -->|Queries metrics :9090| P_PROM
                 end
 
                 SSM_AGENT -->|1. docker pull| ECR
                 SSM_AGENT -->|2. aws ssm get-parameter| SSM_STORE
-                SSM_AGENT -->|3. Injects -e credentials & starts| CONTAINERS
+                SSM_AGENT -->|3. Blue/Green switch & reload| CONTAINERS
             end
         end
     end

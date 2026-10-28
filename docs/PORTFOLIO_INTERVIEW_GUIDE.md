@@ -7,14 +7,14 @@ This guide prepares you to speak confidently about this project in technical int
 ## 1. ELEVATOR PITCH & PROJECT OVERVIEW (30-SECOND & 2-MINUTE VERSIONS)
 
 ### 30-Second Elevator Pitch
-> *"I designed and implemented an end-to-end Cloud DevSecOps platform on AWS that shifts security left into a modular 4-job CI/CD pipeline. The project features automated testing with 56 unit, integration, and deployment engine tests, SAST scanning via SonarQube, container and filesystem vulnerability scanning with Trivy, zero-SSH continuous deployment to AWS EC2 using AWS Systems Manager Run Command with zero-downtime blue/green cutover and automated rollback, and real-time observability powered by Prometheus and Grafana. All cloud infrastructure is provisioned as code using Terraform with GitHub OIDC federation."*
+> *"I designed and implemented an end-to-end Cloud DevSecOps platform on AWS that shifts security left into a modular 4-job CI/CD pipeline. The project features automated testing with 84 unit, platform, and deployment engine tests, SAST scanning via SonarQube, container and filesystem vulnerability scanning with Trivy, zero-SSH continuous deployment to AWS EC2 using AWS Systems Manager Run Command with zero-downtime blue/green cutover and automated rollback, and real-time observability powered by Prometheus and Grafana. All cloud infrastructure is provisioned as code using Terraform with GitHub OIDC federation."*
 
 ### 2-Minute Deep Dive (STAR Format)
 - **Situation:** In modern cloud deployments, teams often struggle with slow release cycles caused by late-stage security audits, security vulnerabilities from static SSH keys stored in CI runners, and a lack of environment parity between local testing and production.
 - **Task:** My goal was to build a production-grade DevSecOps platform hosting a client-facing web application and an operations telemetry dashboard that enforces strict security gates before merge, eliminates all SSH key dependencies on AWS, and provides real-time visibility into application health and metrics.
 - **Action:**
   1. I built a containerized multi-tier stack with Flask, MySQL, Nginx, Prometheus, and Grafana using Docker Compose.
-  2. I architected a modular GitHub Actions pipeline that runs 56 unit, integration, and deployment tests, spins up ephemeral SonarQube for SAST, and blocks on high/critical Trivy findings.
+  2. I architected a modular GitHub Actions pipeline that runs 84 unit, platform, and deployment tests, spins up ephemeral SonarQube for SAST, and blocks on high/critical Trivy findings.
   3. I wrote Terraform modules to provision a custom AWS VPC, security groups without port 22 open, encrypted EBS storage, IMDSv2, ECR container repository, and an IAM OIDC trust role for GitHub Actions.
   4. I orchestrated automated blue/green deployment via AWS Systems Manager Run Command using immutable ECR image tags, pre-warming candidate containers, validating Nginx in an isolated sandbox, and enabling automated rollback on failure.
 - **Result:** The system delivers zero-downtime, fully audited deployments with zero SSH keys in CI, catches 100% of high/critical CVEs before container registries receive them, and provides full telemetry across Golden Signals via Prometheus and Grafana.
@@ -27,6 +27,16 @@ This guide prepares you to speak confidently about this project in technical int
 - **Decision:** Deploy to EC2 instances using the AWS SSM Agent rather than opening port 22 for SSH.
 - **Why:** SSH requires generating, distributing, rotating, and securing private keys. If an SSH key leaks from GitHub Actions secrets, the instance is compromised. SSM operates entirely outbound over HTTPS (TLS 443) using AWS IAM identity and session authorization.
 - **Trade-off:** SSM commands have slight invocation latency (2–5 seconds) and require polling `aws ssm get-command-invocation` for completion status. I solved this by implementing bounded exponential backoff polling in the CI pipeline.
+
+### Decision 2: Zero-Downtime Blue/Green Nginx Upstream Cutover vs. Single Container In-Place Replacement
+- **Decision:** Deploy dual application slots (`devsecops-app-blue` on port 5001 and `devsecops-app-green` on port 5002) fronted by an Nginx reverse proxy with modular `upstream.conf`.
+- **Why:** In-place container replacement requires stopping the active container before starting the new one, resulting in 5–15 seconds of HTTP 502 Bad Gateway downtime. With Blue/Green:
+  1. The candidate container starts and pre-warms on its dedicated port while the active container handles 100% of live traffic.
+  2. Health checks confirm the candidate can reach MySQL and returns HTTP 200 before any routing changes occur.
+  3. The Nginx configuration is validated via `nginx -t` in an isolated sandbox container.
+  4. Traffic switches atomically using `nginx -s reload` (0 dropped connections).
+  5. If the new slot fails post-switch verification, Nginx rolls back to the prior upstream file automatically.
+- **Trade-off:** Requires enough host memory to run two application containers concurrently during the cutover window (~200MB overhead). On a `t3.micro` instance (1GB RAM), this was accommodated by tuning MySQL buffers (`--performance-schema=OFF --innodb-buffer-pool-size=64M`).
 
 ### Decision 2: PyMySQL with Resilient In-Memory Fallback vs. Hard Failures
 - **Decision:** Implement a circuit-breaker and in-memory store fallback in `app/database.py`.
@@ -77,16 +87,27 @@ This guide prepares you to speak confidently about this project in technical int
 - **Root Cause:** The SSM agent had not registered the newly launched instance, or the invocation status was polled without a timeout boundary.
 - **Resolution:** Added a bounded timeout loop (`MAX_WAIT=120` seconds) in the CI workflow script. If the status remains pending after 120 seconds, the job exits with a descriptive error: *"ERROR: Deployment polling timed out after 120s"*, preventing stuck CI runners.
 
+### Incident 3: Terraform EBS Root Volume Encryption State Drift
+- **Symptoms:** A planned `terraform plan` indicated that the active EC2 instance would be destroyed and recreated (`# aws_instance.devsecops_ec2 must be replaced`).
+- **Root Cause:** The live root EBS volume was created unencrypted (`encrypted: false` in state), whereas `terraform/main.tf` specified `encrypted = true`. AWS EC2 does not allow in-place modification of encryption attributes on attached root volumes.
+- **Resolution:** Enforced strict read-only Terraform governance in production to prevent unexpected instance termination and IP loss. Documented the safe zero-loss migration procedure: snapshot volume, copy snapshot with KMS encryption enabled, create an encrypted AMI, and perform a scheduled instance migration during an authorized maintenance window.
+
+### Incident 4: Ambiguous Nginx Upstream Discovery During Zero-Downtime Rollout
+- **Symptoms:** Early deployment logic assumed that if Nginx was running, Green was the candidate, ignoring legacy monolithic Nginx configuration or inline `proxy_pass` formatting variations.
+- **Root Cause:** Substring searches could match commented-out directives or fail on minified/inline configurations.
+- **Resolution:** Engineered strict regex-based directive parsing with comment stripping (`sed 's/#.*//'`). The deployment engine evaluates both `upstream.conf` and live runtime `nginx -T`, validates that exactly one active backend is routed, and fails closed with an abort before modifying any running container if ambiguous or conflicting routes are detected.
+
 ---
 
 ## 5. RESUME BULLET POINTS (ATS-OPTIMIZED)
 
 Add these quantified bullet points to your resume under Projects or Experience:
 
-- **Cloud DevSecOps Platform:** Architected an end-to-end automated DevSecOps platform on AWS using **Python (Flask)**, **Docker**, **Terraform**, and **GitHub Actions**, cutting manual release cycles from hours to under 6 minutes.
+- **Cloud DevSecOps Platform:** Architected an end-to-end automated DevSecOps platform on AWS using **Python (Flask)**, **Docker**, **Terraform**, and **GitHub Actions**, cutting release cycles from hours to under 6 minutes.
+- **Zero-Downtime Blue/Green Deployment:** Engineered an automated zero-downtime Blue/Green traffic cutover engine with **Nginx** and **AWS Systems Manager (SSM)**, validating candidate health on isolated ports and pre-flighting Nginx configuration with automated rollback in under 3 seconds.
 - **Automated Security Gates:** Integrated **SonarQube SAST** and **Aqua Security Trivy** vulnerability scanners into a 13-stage CI/CD pipeline, enforcing zero critical/high CVE tolerance across filesystem dependencies and container layers.
 - **Zero-SSH Production Deployment:** Replaced vulnerable SSH keys with **AWS Systems Manager (SSM) Run Command** and **Amazon ECR**, orchestrating automated remote container deployments with post-deployment health verification.
-- **Infrastructure as Code (IaC):** Authored modular **Terraform** configurations to provision custom VPCs, subnets, least-privilege IAM instance profiles, and hardened EC2 instances enforcing **IMDSv2** and encrypted **gp3** EBS volumes.
+- **Infrastructure as Code (IaC) & Governance:** Authored modular **Terraform** configurations to provision custom VPCs, subnets, least-privilege IAM instance profiles, and hardened EC2 instances enforcing **IMDSv2**; audited state drift and established strict read-only safety controls.
 - **Continuous Observability:** Instrumented application latency and error rates using **Prometheus Flask Exporter** and provisioned real-time **Grafana** operational dashboards for system golden signals.
 
 ---
@@ -95,9 +116,9 @@ Add these quantified bullet points to your resume under Projects or Experience:
 
 | Skill Domain | Locally Verified & Code-Evidenced | Requires Live AWS Account / Permissions |
 | :--- | :--- | :--- |
-| **CI/CD Pipeline** | 42/42 Pytest tests passing, GitHub Actions workflow syntax, branch gate logic | Remote runner execution against live AWS secrets |
+| **CI/CD Pipeline** | 84/84 Pytest tests passing, GitHub Actions workflow syntax, branch gate logic | Remote runner execution against live AWS secrets |
 | **Containers** | Multi-stage Dockerfile, Docker Compose networking & volumes, Nginx reverse proxy | Docker Desktop execution on local Windows daemon |
 | **Security Scanning** | Trivy configuration, `.trivyignore` parsing, SonarQube properties, input sanitization | Live SonarQube portal token generation against external server |
-| **Infrastructure as Code** | Terraform HCL syntax (`main.tf`, `iam.tf`, `ecr.tf`, `variables.tf`, `outputs.tf`) | `terraform apply` execution against live AWS provider |
-| **Cloud Deployment** | SSM Run Command scripts, polling timeout logic, health check bash script | Live dispatch to EC2 instance `i-0fb9dcbeb35b4fdbe` |
+| **Infrastructure as Code** | Terraform HCL syntax (`main.tf`, `iam.tf`, `ecr.tf`, `variables.tf`, `outputs.tf`), drift audit | `terraform apply` execution against live AWS provider |
+| **Cloud Deployment** | Blue/Green cutover engine, SSM Run Command scripts, polling timeout logic, health check script | Live dispatch to EC2 instance `i-0fb9dcbeb35b4fdbe` |
 | **Observability** | Prometheus scrape config (`prometheus.yml`), Grafana provisioning YAMLs, metric endpoints | Live Grafana alert notifications (e.g. Slack/Email webhooks) |

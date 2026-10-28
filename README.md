@@ -89,7 +89,7 @@ flowchart LR
         GH --> S1["1. Checkout Source<br/>actions/checkout@v4"]
         S1 --> S2["2. Check Python<br/>actions/setup-python@v5 (3.12)"]
         S2 --> S3["3. Install Dependencies<br/>pip install requirements, pytest, awscli"]
-        S3 --> S4["4. Run Tests (Pytest)<br/>42 Unit & Integration Tests (Blocking)"]
+        S3 --> S4["4. Run Tests (Pytest)<br/>84 Unit, Platform & Deployment Tests (Blocking)"]
 
         subgraph QUALITY_SEC["Code Quality & Vulnerability Scanning"]
             direction TB
@@ -99,11 +99,12 @@ flowchart LR
             S7 --> S8["8. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
         end
 
-        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4"]
+        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4 (OIDC)"]
         S9 --> S10["10. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
-        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest"]
-        S11 --> S12["12. Deploy to EC2 via SSM<br/>AWS-RunShellScript (Zero-SSH)"]
-        S12 --> S13["13. Application Health Check<br/>curl /health (HTTP Validation)"]
+        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest & :SHA"]
+        S11 --> S12["12. Blue/Green Deploy via SSM<br/>Zero-Downtime Traffic Switch (Zero-SSH)"]
+        S13["13. Application Health Check<br/>curl /health (Independent Verification)"]
+        S12 --> S13
     end
 
     %% AREA 3: AWS Production
@@ -116,7 +117,7 @@ flowchart LR
         subgraph VPC["AWS VPC (10.0.0.0/16) - Subnet (10.0.1.0/24)"]
             direction TB
 
-            subgraph EC2["EC2 Instance (t3.micro - Amazon Linux 2)"]
+            subgraph EC2["EC2 Instance (t3.micro - Amazon Linux 2023)"]
                 direction TB
 
                 SSM_AGENT["SSM Agent<br/>Executes Deployment Script"]
@@ -124,21 +125,24 @@ flowchart LR
                 subgraph CONTAINERS["Docker Containers (devsecops-network)"]
                     direction TB
 
-                    P_NGINX["Nginx:alpine<br/>Reverse Proxy :80"]
-                    P_APP["Flask Application<br/>devsecops-platform:latest :5000"]
+                    P_NGINX["Nginx:alpine<br/>Upstream Reverse Proxy :80"]
+                    P_BLUE["Flask Blue Slot<br/>devsecops-app-blue :5001"]
+                    P_GREEN["Flask Green Slot<br/>devsecops-app-green :5002"]
                     P_MYSQL["MySQL 8.0 Container<br/>devsecops_db :3306 (Persistent Volume)"]
                     P_PROM["Prometheus Container<br/>Metrics Scraper :9090"]
                     P_GRAFANA["Grafana Container<br/>Dashboards :3000"]
 
-                    P_NGINX -->|proxy_pass :5000| P_APP
-                    P_APP -->|TCP :3306| P_MYSQL
-                    P_PROM -->|Scrapes /metrics| P_APP
+                    P_NGINX -->|upstream app_backend| P_BLUE
+                    P_NGINX -.->|zero-downtime cutover| P_GREEN
+                    P_BLUE -->|TCP :3306| P_MYSQL
+                    P_GREEN -->|TCP :3306| P_MYSQL
+                    P_PROM -->|Scrapes /metrics| P_NGINX
                     P_GRAFANA -->|Queries metrics :9090| P_PROM
                 end
 
                 SSM_AGENT -->|1. docker pull| ECR
                 SSM_AGENT -->|2. aws ssm get-parameter| SSM_STORE
-                SSM_AGENT -->|3. Injects -e credentials & starts| CONTAINERS
+                SSM_AGENT -->|3. Blue/Green switch & reload| CONTAINERS
             end
         end
     end
@@ -377,15 +381,16 @@ The test suite uses **[Pytest](https://docs.pytest.org/)** and is split across t
 ### Running Tests
 
 ```bash
-# Run all 42 tests
+# Run all 84 tests
 python -m pytest
 
 # Run with verbose output
 python -m pytest -v
 
-# Run a specific file
+# Run individual test suites
 python -m pytest tests/test_app.py
 python -m pytest tests/test_platform.py
+python -m pytest tests/test_deploy_blue_green.py
 ```
 
 ### Test Configuration
@@ -402,16 +407,16 @@ testpaths = tests
 
 | File | Tests | Coverage |
 |---|---|---|
-| `tests/test_app.py` | 9 | Core Flask routes (`/`, `/health`, `/metrics`, `/api/status`, `/api/contact`) |
-| `tests/test_platform.py` | 33 | DevSecOps console API (pipeline, security, monitoring, infrastructure, diagnostics, rollback, telemetry) |
-| `tests/test_deploy_blue_green.py` | 14 | Automated deployment engine tests (parameter parsing, candidate validation, atomic locking, stale lock recovery, auto-rollback) |
-| **Total** | **56** | **100% Automated Test Suite Passing** |
+| `tests/test_app.py` | 9 | Core Flask routes (`/`, `/health`, `/metrics`, `/api/status`, `/api/contact` validation & storage) |
+| `tests/test_platform.py` | 33 | DevSecOps console API (pipeline status, security scans, monitoring, infrastructure, diagnostics, rollback, telemetry) |
+| `tests/test_deploy_blue_green.py` | 42 | Automated Blue/Green deployment engine tests (route detection, slot switching, unhealthy candidate rejection, lock handling, Nginx pre-flight validation, container preservation, rollback) |
+| **Total** | **84** | **100% Automated Test Suite Passing (84/84 Passed)** |
 
-**Locally verified result:** All 56 tests passing (Python 3.12 / 3.14, pytest)
+**Locally verified result:** All 84 tests passing (Python 3.12 / 3.14, pytest)
 
 **In CI:** Core test suite executed on GitHub Actions runner with zero test failures.
 
-> `test_platform.py` uses a `pytest.fixture(autouse=True)` to mock all external API calls (GitHub, Prometheus, SonarQube) during test runs, ensuring tests are deterministic and do not depend on live external services.
+> `test_platform.py` uses a `pytest.fixture(autouse=True)` to mock external API calls during test runs, ensuring tests are deterministic and do not depend on live external services. `test_deploy_blue_green.py` validates the deployment script logic and edge cases using mock isolated environments.
 
 ### Notable Test Cases
 
@@ -423,6 +428,10 @@ testpaths = tests
 | `test_platform_security_policy_wording` | `.trivyignore` CVEs are reported with accurate policy and rationale |
 | `test_platform_infrastructure_environment_separation` | API cleanly separates AWS Production from local Docker state |
 | `test_platform_diagnostics_context_awareness` | Each diagnostic engine includes `environment` and `check_source` — no fabricated states |
+| `test_active_blue_switches_to_green` | Verified Blue active route switches to Green candidate upon successful health verification |
+| `test_unhealthy_candidate_is_rejected` | Candidate failing health check is destroyed; live traffic never switches |
+| `test_rollback_restores_exact_original_upstream` | Verification failure triggers immediate automatic restoration of original upstream |
+| `test_production_containers_never_stopped_or_removed` | Active serving container is protected from cleanup or premature termination |
 
 ---
 
@@ -507,16 +516,21 @@ AWS infrastructure is provisioned declaratively using **Terraform** (≥ 1.6.0) 
 - **Port 80 only inbound:** No SSH (22) is exposed. All management is performed via SSM.
 - **Public subnet with controlled SG:** The EC2 instance receives a public IP but ingress is restricted to HTTP only.
 
-### Applying the Infrastructure
+### Infrastructure Safety & Known Drift Warning
+
+> [!CAUTION]
+> **STRICT READ-ONLY POLICY:** Do **NOT** run `terraform apply` or `terraform destroy` against the live infrastructure.
+> - **Known Drift:** The active EC2 production instance (`i-0fb9dcbeb35b4fdbe`) has an unencrypted root EBS volume (`encrypted: false` in state), whereas `terraform/main.tf` specifies `encrypted = true`.
+> - **Replacement Risk:** AWS EBS does not support in-place encryption changes on an active root block device. Running `terraform apply` would **force instance replacement** (`forces replacement`), destroying the production EC2 host, reallocating a new public IP, and causing service downtime.
+> - **Safe Migration Protocol:** When encryption is required, take a snapshot of the root EBS volume, create an encrypted copy with a KMS key, generate an AMI, and perform a scheduled cutover.
+
+### Read-Only Inspection
 
 ```bash
 cd terraform
 terraform init
-terraform plan
-terraform apply
+terraform plan  # View plan only; do NOT apply
 ```
-
-> **Warning:** Running `terraform apply` will provision real AWS resources which incur costs. The infrastructure for this project is already deployed in the production environment.
 
 ---
 
