@@ -170,7 +170,7 @@ if [ "$1" = "exec" ]; then
         exit 0
     fi
 
-    if [[ "$CMD" == *"cp /etc/nginx/upstream.conf.previous /etc/nginx/conf.d/upstream.conf"* ]]; then
+    if [[ "$CMD" == *"cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"* ]]; then
         cp "$STATE_DIR/upstream.conf.previous" "$STATE_DIR/upstream.conf" 2>/dev/null || true
         touch "$STATE_DIR/rollback_restored"
         exit 0
@@ -1055,7 +1055,7 @@ exit 0
     fi
 
     echo "upstream app_backend {{ server ${{ACTIVE_TARGET}}:5000; }}" > "$NGINX_CONF_DIR/upstream.conf"
-    echo "events {{ worker_connections 1024; }} http {{ include $NGINX_CONF_DIR/*.conf; }}" > "$NGINX_CONF_DIR/nginx.conf"
+    echo "events {{ worker_connections 1024; }} http {{ include $NGINX_CONF_DIR/upstream.conf; }}" > "$NGINX_CONF_DIR/nginx.conf"
 
     if ! docker run --rm --network devsecops-network -v "$NGINX_CONF_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" -v "$NGINX_CONF_DIR/upstream.conf:/etc/nginx/conf.d/upstream.conf:ro" nginx:alpine nginx -t >/dev/null 2>&1; then
         echo "CRITICAL: Generated Nginx configuration failed pre-flight syntax check. Aborting before disrupting service." >&2

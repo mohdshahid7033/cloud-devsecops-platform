@@ -413,7 +413,7 @@ jobs:
               cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
           events { worker_connections 1024; }
           http {
-              include /etc/nginx/conf.d/*.conf;
+              include /etc/nginx/conf.d/upstream.conf;
               server {
                   listen 80;
                   location / {

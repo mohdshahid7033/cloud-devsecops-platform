@@ -537,7 +537,7 @@ perform_rollback() {
 
     if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous; then
         log_info "Restoring known-good configuration from /etc/nginx/upstream.conf.previous..."
-        $DOCKER_CMD exec "$NGINX_CONTAINER" cp /etc/nginx/upstream.conf.previous /etc/nginx/conf.d/upstream.conf
+        $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"
 
         if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -t >/dev/null 2>&1; then
             log_error "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!"
