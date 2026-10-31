@@ -939,6 +939,10 @@ fi
 
 if [ "$1" = "run" ]; then
     if [[ "$CMD" == *"--rm"* && "$CMD" == *"nginx -t"* ]]; then
+        if [[ "$CMD" != *"--network devsecops-network"* ]]; then
+            echo "docker: pre-flight validation requires --network devsecops-network" >&2
+            exit 1
+        fi
         if [ -f "$STATE_DIR/preflight_fail" ]; then
             echo "nginx: [emerg] syntax error" >&2
             exit 1
@@ -1053,7 +1057,7 @@ exit 0
     echo "upstream app_backend {{ server ${{ACTIVE_TARGET}}:5000; }}" > "$NGINX_CONF_DIR/upstream.conf"
     echo "events {{ worker_connections 1024; }} http {{ include $NGINX_CONF_DIR/*.conf; }}" > "$NGINX_CONF_DIR/nginx.conf"
 
-    if ! docker run --rm -v "$NGINX_CONF_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" -v "$NGINX_CONF_DIR/upstream.conf:/etc/nginx/conf.d/upstream.conf:ro" nginx:alpine nginx -t >/dev/null 2>&1; then
+    if ! docker run --rm --network devsecops-network -v "$NGINX_CONF_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" -v "$NGINX_CONF_DIR/upstream.conf:/etc/nginx/conf.d/upstream.conf:ro" nginx:alpine nginx -t >/dev/null 2>&1; then
         echo "CRITICAL: Generated Nginx configuration failed pre-flight syntax check. Aborting before disrupting service." >&2
         if [ -f "$NGINX_CONF_DIR/backup/nginx.conf.orig" ]; then
             cp "$NGINX_CONF_DIR/backup/nginx.conf.orig" "$NGINX_CONF_DIR/nginx.conf" 2>/dev/null || true
@@ -1289,14 +1293,14 @@ def test_ci_failed_or_empty_container_backup_aborts_safely(tmp_path):
 # ------------------------------------------------------------------------------
 def test_ci_invalid_generated_config_aborts_before_replacing_service(tmp_path):
     """
-    Verifies that pre-flight syntax check ('docker run --rm ... nginx -t') catches
+    Verifies that pre-flight syntax check ('docker run --rm --network devsecops-network ... nginx -t') catches
     configuration errors BEFORE disrupting the running service.
     """
     res, actions, _ = run_ci_migration(tmp_path, setup_flags={"preflight_fail": True})
     assert res.returncode == 1
     assert "CRITICAL: Generated Nginx configuration failed pre-flight syntax check" in res.stderr
 
-    assert any("--rm" in a and "nginx -t" in a for a in actions)
+    assert any("--rm" in a and "nginx -t" in a and "--network devsecops-network" in a for a in actions)
     assert not any(a.startswith("rename") for a in actions)
     assert not any(a.startswith("stop") for a in actions)
 
@@ -1349,11 +1353,12 @@ def test_ci_original_container_not_removed_before_successful_verification(tmp_pa
     assert res.returncode == 0
     assert "devsecops-nginx migration successfully verified" in res.stdout
 
+    preflight_idx = next(i for i, a in enumerate(actions) if "--rm" in a and "--network devsecops-network" in a and "nginx -t" in a)
     run_repl_idx = next(i for i, a in enumerate(actions) if "run -d --name devsecops-nginx" in a)
     exec_health_idx = next(i for i, a in enumerate(actions) if "exec devsecops-nginx nginx -t" in a)
     rm_orig_idx = next(i for i, a in enumerate(actions) if a == "rm -f devsecops-nginx-original")
 
-    assert run_repl_idx < exec_health_idx < rm_orig_idx
+    assert preflight_idx < run_repl_idx < exec_health_idx < rm_orig_idx
 
 
 # ------------------------------------------------------------------------------
