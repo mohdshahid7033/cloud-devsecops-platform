@@ -340,6 +340,8 @@ jobs:
           # Verify Docker bind mount consistency using docker inspect
           NGINX_MOUNTS_VALID=false
           CONFIGS_CONSISTENT=false
+          NGINX_CONF_NARROWED=false
+
           if [ "$NGINX_RUNNING" = true ]; then
               UPSTREAM_SRC=$(docker inspect devsecops-nginx --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d/upstream.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
               CONF_SRC=$(docker inspect devsecops-nginx --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/nginx.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
@@ -359,10 +361,65 @@ jobs:
                       CONFIGS_CONSISTENT=true
                   fi
               fi
+
+              # Verify that nginx.conf on host has narrowed include and matches running container
+              if [ "$NGINX_MOUNTS_VALID" = true ] && [ -s /home/ec2-user/nginx-conf/nginx.conf ]; then
+                  if grep -q 'include /etc/nginx/conf.d/upstream.conf;' /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null && \
+                     ! grep -q 'include /etc/nginx/conf.d/\*\.conf;' /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null; then
+                      HOST_CONF_MD5=$(md5sum /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null | awk '{print $1}')
+                      CONT_CONF_MD5=$(docker exec devsecops-nginx md5sum /etc/nginx/nginx.conf 2>/dev/null | awk '{print $1}')
+                      if [ -n "$HOST_CONF_MD5" ] && [ "$HOST_CONF_MD5" = "$CONT_CONF_MD5" ]; then
+                          NGINX_CONF_NARROWED=true
+                      fi
+                  fi
+              fi
           fi
 
-          # Re-provision Nginx if not running, mounts are invalid, or host/container configs are inconsistent
-          if [ "$NGINX_RUNNING" != true ] || [ "$NGINX_MOUNTS_VALID" != true ] || [ "$CONFIGS_CONSISTENT" != true ]; then
+          # IN-PLACE CONFIGURATION UPDATE:
+          # If Nginx is running and has valid bind mounts, update nginx.conf in place and reload
+          # without recreating or restarting the container!
+          if [ "$NGINX_RUNNING" = true ] && [ "$NGINX_MOUNTS_VALID" = true ] && [ "$NGINX_CONF_NARROWED" != true ]; then
+              echo "Applying narrowed include to nginx.conf in-place through verified bind mount..."
+              cp /home/ec2-user/nginx-conf/nginx.conf /home/ec2-user/nginx-conf/nginx.conf.bak 2>/dev/null || true
+
+              cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
+events { worker_connections 1024; }
+http {
+    include /etc/nginx/conf.d/upstream.conf;
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://app_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}
+NGINX_EOF
+
+              if ! docker exec devsecops-nginx nginx -t >/dev/null 2>&1; then
+                  echo "CRITICAL: In-place nginx.conf update failed syntax check! Reverting to backup..." >&2
+                  cp /home/ec2-user/nginx-conf/nginx.conf.bak /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null || true
+                  exit 1
+              fi
+
+              if ! docker exec devsecops-nginx nginx -s reload >/dev/null 2>&1; then
+                  echo "CRITICAL: In-place Nginx reload failed! Reverting to backup..." >&2
+                  cp /home/ec2-user/nginx-conf/nginx.conf.bak /home/ec2-user/nginx-conf/nginx.conf 2>/dev/null || true
+                  if ! docker exec devsecops-nginx nginx -s reload >/dev/null 2>&1; then
+                      echo "CRITICAL: Recovery reload of backup configuration also failed! Manual intervention required." >&2
+                      exit 2
+                  fi
+                  exit 1
+              fi
+
+              echo "In-place nginx.conf update and reload succeeded without container restart."
+              NGINX_CONF_NARROWED=true
+          fi
+
+          # Re-provision Nginx ONLY if not running or mounts are invalid (fresh install / mount repair)
+          if [ "$NGINX_RUNNING" != true ] || [ "$NGINX_MOUNTS_VALID" != true ]; then
               echo "Provisioning devsecops-nginx with verified modular mounts (routing to ${ACTIVE_TARGET}:5000)..."
 
               # 1. If Nginx is running, preserve original running container configuration
@@ -556,7 +613,7 @@ jobs:
               fi
               echo "devsecops-nginx migration successfully verified and operational with modular mounts."
           else
-              echo "devsecops-nginx is already running with verified, consistent modular upstream mounts."
+              echo "devsecops-nginx is operational with verified, consistent modular upstream mounts."
           fi
 
           echo "=== 5. EXECUTING PRODUCTION BLUE/GREEN DEPLOYMENT SCRIPT ==="
@@ -678,7 +735,8 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-south-1
 
-      - name: Resolve public IP and verify health endpoint
+      - name: Resolve target EC2 instance and public IP
+        id: resolve_ec2
         run: |
           echo "Resolving running EC2 instance with tags Project=devsecops-platform, Environment=production..."
           INSTANCES=$(aws ec2 describe-instances \
@@ -697,6 +755,7 @@ jobs:
 
           INSTANCE_ID=$(echo "$INSTANCES" | tr -d '[:space:]')
           echo "Resolved unique target EC2 Instance ID: $INSTANCE_ID"
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
           PUBLIC_IP=$(aws ec2 describe-instances \
             --instance-ids "$INSTANCE_ID" \
@@ -710,6 +769,13 @@ jobs:
           fi
 
           echo "Target Public IP: $PUBLIC_IP"
+          echo "public_ip=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
+
+      - name: Verify production endpoint health
+        id: verify_health
+        env:
+          PUBLIC_IP: ${{ steps.resolve_ec2.outputs.public_ip }}
+        run: |
           HEALTH_URL="http://${PUBLIC_IP}/health"
           echo "Verifying production endpoint: $HEALTH_URL"
 
@@ -740,4 +806,83 @@ jobs:
             exit 1
           fi
 
+      - name: Trigger automated rollback on external verification failure
+        if: failure() && steps.verify_health.outcome == 'failure'
+        env:
+          TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
+        run: |
+          echo "External production verification failed! Triggering automated rollback via SSM..."
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$TARGET_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["/home/ec2-user/scripts/deploy_blue_green.sh --rollback"]' \
+            --region ap-south-1 \
+            --query "Command.CommandId" \
+            --output text)
+
+          if [ -z "$COMMAND_ID" ] || [ "$COMMAND_ID" = "None" ]; then
+            echo "CRITICAL: Failed to dispatch SSM rollback command. Manual intervention required!" >&2
+            exit 1
+          fi
+
+          echo "Dispatched SSM Rollback Command ID: $COMMAND_ID on instance $TARGET_INSTANCE_ID"
+
+          MAX_WAIT=90
+          START_TIME=$(date +%s)
+          STATUS=""
+
+          while [ $(( $(date +%s) - START_TIME )) -lt $MAX_WAIT ]; do
+            STATUS=$(timeout 15 aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$TARGET_INSTANCE_ID" \
+              --region ap-south-1 \
+              --query "Status" \
+              --output text 2>/dev/null) || STATUS=""
+
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            echo "Rollback SSM Status (${ELAPSED}s elapsed): ${STATUS:-Waiting...}"
+
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          INVOCATION_JSON=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$TARGET_INSTANCE_ID" \
+            --region ap-south-1 \
+            --output json 2>/dev/null || true)
+
+          if [ -n "$INVOCATION_JSON" ]; then
+            echo "=== Rollback SSM Output ==="
+            echo "$INVOCATION_JSON" | jq -r '.StandardOutputContent // empty'
+            STDERR=$(echo "$INVOCATION_JSON" | jq -r '.StandardErrorContent // empty')
+            if [ -n "$STDERR" ]; then
+              echo "=== Rollback SSM Error ==="
+              echo "$STDERR"
+            fi
+          fi
+
+          if [ "$STATUS" = "Success" ]; then
+            echo "Automated rollback succeeded on production EC2: previous slot restored and verified."
+            echo "However, the candidate deployment failed external verification and was rejected."
+            exit 1
+          else
+            echo "CRITICAL: Automated rollback failed with status: ${STATUS:-Unknown}!" >&2
+            echo "CRITICAL: MANUAL INTERVENTION REQUIRED IMMEDIATELY!" >&2
+            exit 1
+          fi
+
+      - name: Finalize successful production deployment
+        if: success()
+        env:
+          TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
+        run: |
+          echo "External verification passed. Finalizing deployment state on production instance..."
+          aws ssm send-command \
+            --instance-ids "$TARGET_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["/home/ec2-user/scripts/deploy_blue_green.sh --mark-verified"]' \
+            --region ap-south-1 >/dev/null 2>&1 || true
           echo "Production deployment and verification completed successfully!"

@@ -165,8 +165,8 @@ if [ "$1" = "exec" ]; then
         exit 0
     fi
 
-    if [[ "$CMD" == *"cp /etc/nginx/conf.d/upstream.conf /etc/nginx/upstream.conf.previous"* ]]; then
-        cp "$STATE_DIR/upstream.conf" "$STATE_DIR/upstream.conf.previous" 2>/dev/null || true
+    if [[ "$CMD" == *"cat /etc/nginx/upstream.conf.previous"* ]] && [[ "$CMD" != *">"* ]]; then
+        cat "$STATE_DIR/upstream.conf.previous" 2>/dev/null || true
         exit 0
     fi
 
@@ -210,7 +210,7 @@ exit 0
     shutil.rmtree(mock_dir, ignore_errors=True)
 
 
-def run_deploy(mock_env, deploy_image="test-repo/app:latest", extra_env=None):
+def run_deploy(mock_env, deploy_image="test-repo/app:latest", extra_env=None, args=None):
     """Executes deploy_blue_green.sh with mocked dependencies and captures output."""
     env = os.environ.copy()
     env["DOCKER_CMD"] = mock_env["docker_bin"]
@@ -219,10 +219,14 @@ def run_deploy(mock_env, deploy_image="test-repo/app:latest", extra_env=None):
     env["PROBE_TIMEOUT_SECS"] = "4"
     env["POST_SWITCH_TIMEOUT_SECS"] = "4"
     env["DEPLOY_LOCK_PATH"] = (mock_env["mock_dir"] / "deploy.lock").as_posix()
+    env["DEPLOYMENT_STATE_FILE"] = (mock_env["mock_dir"] / "deployment_state.json").as_posix()
     if extra_env:
         env.update(extra_env)
 
-    cmd = [BASH_BIN, SCRIPT_PATH, deploy_image]
+    if args is not None:
+        cmd = [BASH_BIN, SCRIPT_PATH] + args
+    else:
+        cmd = [BASH_BIN, SCRIPT_PATH, deploy_image]
     res = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return res
 
@@ -1465,3 +1469,549 @@ def test_ci_restoration_of_both_configuration_files_on_rollback(tmp_path):
     conf_dir = work_dir / "nginx-conf"
     assert (conf_dir / "nginx.conf").read_text(encoding="utf-8") == (conf_dir / "backup" / "nginx.conf.orig").read_text(encoding="utf-8")
     assert (conf_dir / "upstream.conf").read_text(encoding="utf-8") == (conf_dir / "backup" / "upstream.conf.orig").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------------------
+# Helpers for In-Place Nginx Configuration Updates and External SSM Recovery
+# ------------------------------------------------------------------------------
+def run_ci_inplace_update(tmp_path, setup_flags=None):
+    """
+    Executes the CI in-place Nginx configuration update logic from .github/workflows/ci.yml
+    with mock Docker.
+    """
+    setup_flags = setup_flags or {}
+    work_dir = tmp_path / "ci_inplace_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    conf_dir = work_dir / "nginx-conf"
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    bin_dir = work_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = work_dir.as_posix()
+
+    # Host configuration files
+    if "narrowed_conf" in setup_flags:
+        (conf_dir / "nginx.conf").write_text(
+            "events { worker_connections 1024; } http { include /etc/nginx/conf.d/upstream.conf; server { listen 80; } }\n",
+            encoding="utf-8", newline="\n"
+        )
+    else:
+        (conf_dir / "nginx.conf").write_text(
+            "events { worker_connections 1024; } http { include /etc/nginx/conf.d/*.conf; server { listen 80; } }\n",
+            encoding="utf-8", newline="\n"
+        )
+    (conf_dir / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+
+    mock_docker_script = f"""#!/usr/bin/env bash
+STATE_DIR="{state_dir}"
+CMD="$*"
+
+if [ "$1" = "ps" ]; then
+    echo "devsecops-nginx"
+    exit 0
+fi
+
+if [ "$1" = "inspect" ]; then
+    if [ -f "$STATE_DIR/invalid_mounts" ]; then
+        echo ""
+        exit 0
+    fi
+    if [[ "$CMD" == *"/etc/nginx/conf.d/upstream.conf"* ]]; then
+        echo "/home/ec2-user/nginx-conf/upstream.conf"
+    elif [[ "$CMD" == *"/etc/nginx/nginx.conf"* ]]; then
+        echo "/home/ec2-user/nginx-conf/nginx.conf"
+    else
+        echo "/home/ec2-user/nginx-conf/upstream.conf"
+        echo "/home/ec2-user/nginx-conf/nginx.conf"
+    fi
+    exit 0
+fi
+
+if [ "$1" = "exec" ]; then
+    shift
+    if [ "$1" = "-i" ]; then shift; fi
+    shift # container name
+    EXEC_CMD="$*"
+    if [[ "$EXEC_CMD" == *"md5sum /etc/nginx/conf.d/upstream.conf"* ]]; then
+        md5sum "{conf_dir.as_posix()}/upstream.conf" 2>/dev/null | awk '{{print $1}}'
+        exit 0
+    fi
+    if [[ "$EXEC_CMD" == *"md5sum /etc/nginx/nginx.conf"* ]]; then
+        md5sum "{conf_dir.as_posix()}/nginx.conf" 2>/dev/null | awk '{{print $1}}'
+        exit 0
+    fi
+    if [[ "$EXEC_CMD" == *"test -s /etc/nginx/conf.d/upstream.conf"* ]]; then
+        exit 0
+    fi
+    if [[ "$EXEC_CMD" == *"nginx -t"* ]]; then
+        if [ -f "$STATE_DIR/inplace_syntax_fail" ]; then
+            echo "nginx: [emerg] syntax error" >&2
+            exit 1
+        fi
+        exit 0
+    fi
+    if [[ "$EXEC_CMD" == *"nginx -s reload"* ]]; then
+        COUNT=0
+        if [ -f "$STATE_DIR/reload_count" ]; then
+            COUNT=$(cat "$STATE_DIR/reload_count")
+        fi
+        COUNT=$((COUNT + 1))
+        echo "$COUNT" > "$STATE_DIR/reload_count"
+        if [ "$COUNT" -eq 1 ] && [ -f "$STATE_DIR/inplace_reload_fail" ]; then
+            echo "nginx: reload failed" >&2
+            exit 1
+        fi
+        if [ "$COUNT" -gt 1 ] && [ -f "$STATE_DIR/recovery_reload_fail" ]; then
+            echo "nginx: recovery reload failed" >&2
+            exit 1
+        fi
+        echo "nginx: reload ok"
+        exit 0
+    fi
+    exit 0
+fi
+
+if [ "$1" = "stop" ] || [ "$1" = "rm" ] || [ "$1" = "rename" ] || [ "$1" = "run" ]; then
+    echo "$*" >> "$STATE_DIR/docker_ci_actions.log"
+    exit 0
+fi
+
+exit 0
+"""
+    docker_bin = bin_dir / "docker.sh"
+    docker_bin.write_text(mock_docker_script, encoding="utf-8", newline="\n")
+
+    for k, v in setup_flags.items():
+        if v is True:
+            (work_dir / k).touch()
+
+    ci_script = f"""
+    set -euo pipefail
+    docker() {{
+        bash "{docker_bin.as_posix()}" "$@"
+    }}
+    CONF_DIR="{conf_dir.as_posix()}"
+    NGINX_RUNNING=true
+    NGINX_MOUNTS_VALID=false
+    CONFIGS_CONSISTENT=false
+    NGINX_CONF_NARROWED=false
+
+    UPSTREAM_SRC=$(docker inspect devsecops-nginx --format '{{{{range .Mounts}}}}{{{{if eq .Destination "/etc/nginx/conf.d/upstream.conf"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}' 2>/dev/null || true)
+    CONF_SRC=$(docker inspect devsecops-nginx --format '{{{{range .Mounts}}}}{{{{if eq .Destination "/etc/nginx/nginx.conf"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}' 2>/dev/null || true)
+
+    if [ "$UPSTREAM_SRC" = "/home/ec2-user/nginx-conf/upstream.conf" ] && \
+       [ "$CONF_SRC" = "/home/ec2-user/nginx-conf/nginx.conf" ]; then
+        NGINX_MOUNTS_VALID=true
+    fi
+
+    if [ "$NGINX_MOUNTS_VALID" = true ] && [ -s "$CONF_DIR/nginx.conf" ]; then
+        if grep -q 'include /etc/nginx/conf.d/upstream.conf;' "$CONF_DIR/nginx.conf" 2>/dev/null && \
+           ! grep -q 'include /etc/nginx/conf.d/\\*\\.conf;' "$CONF_DIR/nginx.conf" 2>/dev/null; then
+            HOST_CONF_MD5=$(md5sum "$CONF_DIR/nginx.conf" 2>/dev/null | awk '{{print $1}}')
+            CONT_CONF_MD5=$(docker exec devsecops-nginx md5sum /etc/nginx/nginx.conf 2>/dev/null | awk '{{print $1}}')
+            if [ -n "$HOST_CONF_MD5" ] && [ "$HOST_CONF_MD5" = "$CONT_CONF_MD5" ]; then
+                NGINX_CONF_NARROWED=true
+            fi
+        fi
+    fi
+
+    if [ "$NGINX_RUNNING" = true ] && [ "$NGINX_MOUNTS_VALID" = true ] && [ "$NGINX_CONF_NARROWED" != true ]; then
+        echo "Applying narrowed include to nginx.conf in-place through verified bind mount..."
+        cp "$CONF_DIR/nginx.conf" "$CONF_DIR/nginx.conf.bak" 2>/dev/null || true
+
+        cat << 'NGINX_EOF' > "$CONF_DIR/nginx.conf"
+events {{ worker_connections 1024; }}
+http {{
+    include /etc/nginx/conf.d/upstream.conf;
+    server {{
+        listen 80;
+        location / {{
+            proxy_pass http://app_backend;
+        }}
+    }}
+}}
+NGINX_EOF
+
+        if ! docker exec devsecops-nginx nginx -t >/dev/null 2>&1; then
+            echo "CRITICAL: In-place nginx.conf update failed syntax check! Reverting to backup..." >&2
+            cp "$CONF_DIR/nginx.conf.bak" "$CONF_DIR/nginx.conf" 2>/dev/null || true
+            exit 1
+        fi
+
+        if ! docker exec devsecops-nginx nginx -s reload >/dev/null 2>&1; then
+            echo "CRITICAL: In-place Nginx reload failed! Reverting to backup..." >&2
+            cp "$CONF_DIR/nginx.conf.bak" "$CONF_DIR/nginx.conf" 2>/dev/null || true
+            if ! docker exec devsecops-nginx nginx -s reload >/dev/null 2>&1; then
+                echo "CRITICAL: Recovery reload of backup configuration also failed! Manual intervention required." >&2
+                exit 2
+            fi
+            exit 1
+        fi
+
+        echo "In-place nginx.conf update and reload succeeded without container restart."
+        NGINX_CONF_NARROWED=true
+    fi
+
+    if [ "$NGINX_RUNNING" != true ] || [ "$NGINX_MOUNTS_VALID" != true ]; then
+        echo "Container recreation triggered"
+        docker stop devsecops-nginx
+        docker rm -f devsecops-nginx
+        docker run -d --name devsecops-nginx nginx:alpine
+    fi
+    """
+
+    res = subprocess.run([BASH_BIN, "-c", ci_script], capture_output=True, text=True)
+    log_file = work_dir / "docker_ci_actions.log"
+    actions = log_file.read_text(encoding="utf-8").splitlines() if log_file.exists() else []
+    return res, actions, conf_dir
+
+
+def run_ssm_rollback_simulation(status, exit_code="0", stdout_msg="ROLLBACK SUCCESS", stderr_msg=""):
+    """
+    Simulates the external SSM rollback evaluation logic from .github/workflows/ci.yml.
+    """
+    script = f"""
+    STATUS="{status}"
+    EXIT_CODE="{exit_code}"
+    STDOUT_MSG="{stdout_msg}"
+    STDERR_MSG="{stderr_msg}"
+
+    echo "Status: $STATUS | ExitCode: $EXIT_CODE"
+    echo "--- Standard Output ---"
+    echo "$STDOUT_MSG"
+    echo "--- Standard Error ---"
+    echo "$STDERR_MSG"
+
+    if [ "$STATUS" = "Success" ] && [ "$EXIT_CODE" = "0" ]; then
+        echo "=================================================================="
+        echo "PRODUCTION ROLLBACK VERIFIED: Reverse proxy restored to previous slot and confirmed healthy."
+        echo "The failed candidate container has been stopped and removed."
+        echo "Deployment job marked FAILED to indicate original deployment was not applied."
+        echo "=================================================================="
+        exit 1
+    elif [ "$STATUS" = "TimedOut" ]; then
+        echo "CRITICAL: MANUAL INTERVENTION REQUIRED: SSM Rollback command timed out or did not complete." >&2
+        exit 1
+    else
+        echo "CRITICAL: MANUAL INTERVENTION REQUIRED: SSM Rollback command failed on EC2 instance (Status: $STATUS, ExitCode: $EXIT_CODE)." >&2
+        exit 1
+    fi
+    """
+    res = subprocess.run([BASH_BIN, "-c", script], capture_output=True, text=True)
+    return res
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 43: In-place Nginx configuration update without container restart
+# ------------------------------------------------------------------------------
+def test_inplace_nginx_update_without_container_restart(tmp_path):
+    """
+    Verifies that when devsecops-nginx is running with valid bind mounts,
+    the configuration is updated through the bind mount and reloaded in place
+    without stopping, removing, or running a new container.
+    """
+    res, actions, conf_dir = run_ci_inplace_update(tmp_path)
+    assert res.returncode == 0
+    assert "In-place nginx.conf update and reload succeeded without container restart." in res.stdout
+    assert not any("stop" in a for a in actions)
+    assert not any("rm" in a for a in actions)
+    assert not any("run" in a for a in actions)
+    assert "include /etc/nginx/conf.d/upstream.conf;" in (conf_dir / "nginx.conf").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 44: Invalid Nginx configuration recovery during in-place update
+# ------------------------------------------------------------------------------
+def test_invalid_nginx_configuration_recovery_inplace(tmp_path):
+    """
+    Verifies that if the new in-place Nginx configuration fails syntax validation,
+    the original configuration is restored from backup without stopping the container.
+    """
+    res, actions, conf_dir = run_ci_inplace_update(tmp_path, setup_flags={"inplace_syntax_fail": True})
+    assert res.returncode == 1
+    assert "CRITICAL: In-place nginx.conf update failed syntax check! Reverting to backup..." in res.stderr
+    assert not any("stop" in a for a in actions)
+    assert not any("rm" in a for a in actions)
+    assert "include /etc/nginx/conf.d/*.conf;" in (conf_dir / "nginx.conf").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 45: Failed reload recovery during in-place update
+# ------------------------------------------------------------------------------
+def test_failed_reload_recovery_inplace(tmp_path):
+    """
+    Verifies that if in-place reload fails, the backup configuration is restored
+    and reloaded. If recovery reload also fails, it exits with critical error code 2.
+    """
+    res, actions, conf_dir = run_ci_inplace_update(tmp_path, setup_flags={"inplace_reload_fail": True})
+    assert res.returncode == 1
+    assert "CRITICAL: In-place Nginx reload failed! Reverting to backup..." in res.stderr
+    assert not any("stop" in a for a in actions)
+
+    # When recovery reload also fails
+    res_critical, _, _ = run_ci_inplace_update(tmp_path / "crit", setup_flags={"inplace_reload_fail": True, "recovery_reload_fail": True})
+    assert res_critical.returncode == 2
+    assert "CRITICAL: Recovery reload of backup configuration also failed! Manual intervention required." in res_critical.stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 46: Persistent deployment state creation and transitions
+# ------------------------------------------------------------------------------
+def test_deployment_state_creation_and_transitions(mock_env):
+    """
+    Verifies that deploy_blue_green.sh writes an accurate persistent deployment state,
+    records deployment ID, previous slot, candidate slot, and transitions to 'standby_ready',
+    and transitions to 'verified' upon invocation of --mark-verified.
+    """
+    res = run_deploy(mock_env, "test-repo/app:commit_safe123")
+    assert res.returncode == 0
+
+    state_file = mock_env["mock_dir"] / "deployment_state.json"
+    assert state_file.exists()
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["deployment_id"] == "commit_safe123"
+    assert state["previous_slot"] == "blue"
+    assert state["previous_container"] == "devsecops-app-blue"
+    assert state["candidate_slot"] == "green"
+    assert state["candidate_container"] == "devsecops-app-green"
+    assert state["cutover_performed"] is True
+    assert state["deployment_status"] == "standby_ready"
+    assert "timestamp" in state
+
+    # Now verify --mark-verified transitions status to 'verified'
+    res_verify = run_deploy(mock_env, args=["--mark-verified"])
+    assert res_verify.returncode == 0
+    assert "Deployment state successfully marked as verified." in res_verify.stdout
+
+    updated_state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert updated_state["deployment_status"] == "verified"
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 47: Standalone rollback successfully restores traffic and removes candidate
+# ------------------------------------------------------------------------------
+def test_standalone_rollback_success(mock_env):
+    """
+    Verifies that deploy_blue_green.sh --rollback restores upstream to previous slot,
+    reloads Nginx, verifies public health, safely removes the candidate container,
+    and records 'rolled_back' state.
+    """
+    # Simulate candidate green active and candidate container running
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_v2",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 0
+    assert "Restored live reverse proxy to previous slot 'devsecops-app-blue'" in res.stdout
+    assert "ROLLBACK VERIFIED: Reverse proxy confirmed healthy on previous slot 'devsecops-app-blue'" in res.stdout
+    assert "Stopped and removed candidate container 'devsecops-app-green'" in res.stdout
+
+    # Verify upstream was restored to blue
+    restored_upstream = (mock_env["mock_dir"] / "upstream.conf").read_text(encoding="utf-8")
+    assert "devsecops-app-blue:5000" in restored_upstream
+
+    # Verify state record updated
+    final_state = json.loads((mock_env["mock_dir"] / "deployment_state.json").read_text(encoding="utf-8"))
+    assert final_state["deployment_status"] == "rolled_back"
+    assert final_state["cutover_performed"] is False
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 48: Standalone rollback is idempotent when already completed
+# ------------------------------------------------------------------------------
+def test_standalone_rollback_already_completed_idempotent(mock_env):
+    """
+    Verifies that calling --rollback when reverse proxy is already routing to
+    the previous slot completes idempotently with code 0 without errors.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_v2",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": False,
+            "deployment_status": "rolled_back"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 0
+    assert "Rollback is already completed. Live reverse proxy is routing to previous slot 'devsecops-app-blue'." in res.stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 49: Standalone rollback handles missing or malformed state safely
+# ------------------------------------------------------------------------------
+def test_standalone_rollback_missing_or_malformed_state(mock_env):
+    """
+    Verifies standalone rollback behavior with missing or malformed state file:
+    - If live and backup configurations are unambiguous, restores safely.
+    - If backup is missing or ambiguous, refuses container deletion and exits code 2.
+    """
+    # Case A: Missing state, but live (green) and backup (blue) are clear
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    state_file = mock_env["mock_dir"] / "deployment_state.json"
+    if state_file.exists():
+        state_file.unlink()
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 0
+    assert "Restored live reverse proxy to previous slot 'devsecops-app-blue'" in res.stdout
+
+    # Case B: Missing state AND missing backup configuration
+    (mock_env["mock_dir"] / "upstream.conf.previous").unlink(missing_ok=True)
+    res_b = run_deploy(mock_env, args=["--rollback"])
+    assert res_b.returncode == 2
+    assert "Ambiguous rollback state" in res_b.stderr
+
+    # Case C: Malformed JSON in state file (and no valid backup)
+    state_file.write_text("{malformed: json, not valid ...", encoding="utf-8")
+    res_c = run_deploy(mock_env, args=["--rollback"])
+    assert res_c.returncode == 2
+    assert "Ambiguous rollback state" in res_c.stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 50: Standalone rollback detects ambiguous targets and refuses cleanup
+# ------------------------------------------------------------------------------
+def test_standalone_rollback_ambiguous_targets_refuses_cleanup(mock_env):
+    """
+    Verifies that if live and backup targets conflict or are identical,
+    standalone rollback reports ambiguous state, does not delete any containers,
+    and exits with code 2 requiring manual intervention.
+    """
+    # Both point to green (ambiguous conflict)
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_v2",
+            "previous_slot": "green",
+            "previous_container": "devsecops-app-green",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 2
+    assert "Ambiguous rollback state" in res.stderr
+    assert "manual intervention required" in res.stderr
+
+    # Verify no container was deleted
+    log_file = mock_env["mock_dir"] / "docker_actions.log"
+    actions = log_file.read_text(encoding="utf-8").splitlines() if log_file.exists() else []
+    assert not any("rm devsecops-app-green" in a for a in actions)
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 51: Candidate cleanup protection prevents removal of core infrastructure
+# ------------------------------------------------------------------------------
+def test_candidate_cleanup_protects_infrastructure_containers(mock_env):
+    """
+    Verifies that the protected infrastructure containers (devsecops-nginx,
+    devsecops-mysql, devsecops-prometheus, devsecops-grafana) can never be removed
+    during candidate cleanup, even if recorded in deployment state.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    # Tampered state attempting to target MySQL
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_tampered",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "mysql",
+            "candidate_container": "devsecops-mysql",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    # Ambiguity check prevents execution or candidate cleanup guard skips it
+    log_file = mock_env["mock_dir"] / "docker_actions.log"
+    actions = log_file.read_text(encoding="utf-8").splitlines() if log_file.exists() else []
+    assert not any("devsecops-mysql" in a for a in actions)
+    assert not any("devsecops-nginx" in a for a in actions)
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 52: SSM rollback reporting on success, failure, and timeout
+# ------------------------------------------------------------------------------
+def test_external_ssm_recovery_reporting():
+    """
+    Verifies external SSM rollback command evaluation:
+    - Success: reports recovery verified and marks workflow FAILED (exit 1).
+    - Failed: reports critical manual intervention required (exit 1).
+    - TimedOut: reports critical manual intervention required (exit 1).
+    """
+    # Success scenario
+    res_succ = run_ssm_rollback_simulation("Success", exit_code="0")
+    assert res_succ.returncode == 1
+    assert "PRODUCTION ROLLBACK VERIFIED: Reverse proxy restored to previous slot and confirmed healthy." in res_succ.stdout
+
+    # Failure scenario
+    res_fail = run_ssm_rollback_simulation("Failed", exit_code="1")
+    assert res_fail.returncode == 1
+    assert "CRITICAL: MANUAL INTERVENTION REQUIRED: SSM Rollback command failed on EC2 instance" in res_fail.stderr
+
+    # Timeout scenario
+    res_timeout = run_ssm_rollback_simulation("TimedOut")
+    assert res_timeout.returncode == 1
+    assert "CRITICAL: MANUAL INTERVENTION REQUIRED: SSM Rollback command timed out or did not complete." in res_timeout.stderr

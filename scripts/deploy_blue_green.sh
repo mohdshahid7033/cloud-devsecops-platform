@@ -29,6 +29,8 @@ set -euo pipefail
 # Configuration & Configurable Overrides (for testing & production)
 # ------------------------------------------------------------------------------
 DEPLOY_IMAGE="${1:-${DEPLOY_IMAGE:-}}"
+DEPLOYMENT_ID="${DEPLOYMENT_ID:-${GITHUB_SHA:-${DEPLOY_IMAGE##*:}}}"
+DEPLOYMENT_STATE_FILE="${DEPLOYMENT_STATE_FILE:-/home/ec2-user/scripts/deployment_state.json}"
 
 DOCKER_CMD="${DOCKER_CMD:-docker}"
 CURL_CMD="${CURL_CMD:-curl}"
@@ -120,6 +122,235 @@ release_lock() {
 }
 
 # ------------------------------------------------------------------------------
+# Persistent Deployment State Management Helpers
+# ------------------------------------------------------------------------------
+save_deployment_state() {
+    local status="$1"
+    local cutover="$2"
+    local state_dir
+    state_dir="$(dirname "$DEPLOYMENT_STATE_FILE")"
+    if ! mkdir -p "$state_dir" 2>/dev/null; then
+        state_dir="/tmp"
+        DEPLOYMENT_STATE_FILE="/tmp/$(basename "$DEPLOYMENT_STATE_FILE")"
+    fi
+    local tmp_file="${DEPLOYMENT_STATE_FILE}.tmp.$$"
+    cat << EOF > "$tmp_file"
+{
+  "deployment_id": "${DEPLOYMENT_ID:-unknown}",
+  "previous_slot": "${ACTIVE_SLOT:-none}",
+  "previous_container": "${ACTIVE_CONTAINER:-none}",
+  "candidate_slot": "${CANDIDATE_SLOT:-none}",
+  "candidate_container": "${CANDIDATE_CONTAINER:-none}",
+  "cutover_performed": ${cutover},
+  "deployment_status": "${status}",
+  "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date +'%Y-%m-%dT%H:%M:%SZ')"
+}
+EOF
+    mv -f "$tmp_file" "$DEPLOYMENT_STATE_FILE"
+}
+
+mark_verified() {
+    log_info "Marking deployment state as verified..."
+    if [ -f "$DEPLOYMENT_STATE_FILE" ]; then
+        local prev_cont="" cand_cont="" prev_s="" cand_s="" dep_id=""
+        if command -v "$JQ_CMD" >/dev/null 2>&1; then
+            dep_id=$($JQ_CMD -r '.deployment_id // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            prev_s=$($JQ_CMD -r '.previous_slot // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            prev_cont=$($JQ_CMD -r '.previous_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            cand_s=$($JQ_CMD -r '.candidate_slot // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            cand_cont=$($JQ_CMD -r '.candidate_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        else
+            local parsed_state
+            parsed_state=$(python -c '
+import sys, json
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    print(str(d.get("deployment_id", "")) + " " + str(d.get("previous_slot", "")) + " " + str(d.get("previous_container", "")) + " " + str(d.get("candidate_slot", "")) + " " + str(d.get("candidate_container", "")))
+except Exception:
+    pass
+' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            dep_id=$(echo "$parsed_state" | awk '{print $1}')
+            prev_s=$(echo "$parsed_state" | awk '{print $2}')
+            prev_cont=$(echo "$parsed_state" | awk '{print $3}')
+            cand_s=$(echo "$parsed_state" | awk '{print $4}')
+            cand_cont=$(echo "$parsed_state" | awk '{print $5}')
+        fi
+        DEPLOYMENT_ID="${dep_id:-$DEPLOYMENT_ID}"
+        ACTIVE_SLOT="${prev_s:-$ACTIVE_SLOT}"
+        ACTIVE_CONTAINER="${prev_cont:-$ACTIVE_CONTAINER}"
+        CANDIDATE_SLOT="${cand_s:-$CANDIDATE_SLOT}"
+        CANDIDATE_CONTAINER="${cand_cont:-$CANDIDATE_CONTAINER}"
+        save_deployment_state "verified" true
+        log_info "Deployment state successfully marked as verified."
+    else
+        log_warn "No deployment state file found to mark as verified."
+    fi
+}
+
+execute_standalone_rollback() {
+    local reason="${1:-External production health check failed}"
+    log_warn "TRIGGERING STANDALONE ROLLBACK: $reason"
+
+    # 1. Read recorded deployment state if present
+    local recorded_candidate=""
+    local recorded_previous=""
+    local cutover_performed="unknown"
+    local recorded_status=""
+    local state_file_valid=false
+
+    if [ -f "$DEPLOYMENT_STATE_FILE" ]; then
+        if command -v "$JQ_CMD" >/dev/null 2>&1; then
+            recorded_candidate=$($JQ_CMD -r '.candidate_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            recorded_previous=$($JQ_CMD -r '.previous_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            cutover_performed=$($JQ_CMD -r '.cutover_performed // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            recorded_status=$($JQ_CMD -r '.deployment_status // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        else
+            local parsed_state
+            parsed_state=$(python -c '
+import sys, json
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    print(str(d.get("candidate_container", "")) + " " + str(d.get("previous_container", "")) + " " + str(d.get("cutover_performed", "")).lower() + " " + str(d.get("deployment_status", "")))
+except Exception:
+    pass
+' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+            recorded_candidate=$(echo "$parsed_state" | awk '{print $1}')
+            recorded_previous=$(echo "$parsed_state" | awk '{print $2}')
+            cutover_performed=$(echo "$parsed_state" | awk '{print $3}')
+            recorded_status=$(echo "$parsed_state" | awk '{print $4}')
+        fi
+        if [ -n "$recorded_candidate" ] && [ -n "$recorded_previous" ] && [ "$recorded_candidate" != "none" ]; then
+            state_file_valid=true
+        fi
+    fi
+
+    # 2. Inspect live Nginx configuration
+    local live_conf
+    live_conf=$($DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/conf.d/upstream.conf 2>/dev/null || true)
+    local live_target
+    live_target=$(echo "$live_conf" | grep -E 'server[[:space:]]+[a-zA-Z0-9_-]+(:[0-9]+)?;' | head -n1 | awk '{print $2}' | cut -d: -f1 || true)
+
+    # 3. Inspect backup upstream configuration
+    local backup_conf=""
+    if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous 2>/dev/null; then
+        backup_conf=$($DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/upstream.conf.previous 2>/dev/null || true)
+    elif [ -s /home/ec2-user/nginx-conf/upstream.conf.bak ]; then
+        backup_conf=$(cat /home/ec2-user/nginx-conf/upstream.conf.bak 2>/dev/null || true)
+    fi
+
+    local backup_target=""
+    if [ -n "$backup_conf" ]; then
+        backup_target=$(echo "$backup_conf" | grep -E 'server[[:space:]]+[a-zA-Z0-9_-]+(:[0-9]+)?;' | head -n1 | awk '{print $2}' | cut -d: -f1 || true)
+    fi
+
+    log_info "Live upstream target     : ${live_target:-none}"
+    log_info "Backup upstream target   : ${backup_target:-none}"
+    log_info "Recorded candidate       : ${recorded_candidate:-none}"
+    log_info "Recorded previous slot   : ${recorded_previous:-none}"
+    log_info "Recorded cutover state   : ${cutover_performed}"
+
+    # 4. Check for Idempotency: Has rollback already been applied?
+    if [ -n "$backup_target" ] && [ "$live_target" = "$backup_target" ]; then
+        if [ "$recorded_status" = "rolled_back" ] || [ "$cutover_performed" = "false" ]; then
+            log_info "Active Nginx upstream is ALREADY pointing to the rollback target ($backup_target)."
+            log_info "ROLLBACK ALREADY COMPLETE & VERIFIED: Production service is healthy on '$backup_target'."
+            log_info "Rollback is already completed. Live reverse proxy is routing to previous slot '$backup_target'."
+            save_deployment_state "rolled_back" false
+            exit 0
+        fi
+    fi
+
+    # 5. Ambiguity Check: Ensure state is unambiguous before modifying routing or deleting containers
+    local state_ambiguous=false
+    if [ -z "$live_target" ] || [ -z "$backup_target" ]; then
+        log_error "Ambiguity error: live target or backup target could not be resolved."
+        state_ambiguous=true
+    fi
+    if [ "$live_target" = "$backup_target" ]; then
+        log_error "Ambiguity error: live target and backup target are identical ('$live_target')."
+        state_ambiguous=true
+    fi
+    if [ "$state_file_valid" = true ]; then
+        if [ "$live_target" != "$recorded_candidate" ]; then
+            log_error "Ambiguity error: live target '$live_target' does not match recorded candidate '$recorded_candidate'."
+            state_ambiguous=true
+        fi
+        if [ "$backup_target" != "$recorded_previous" ]; then
+            log_error "Ambiguity error: backup target '$backup_target' does not match recorded previous slot '$recorded_previous'."
+            state_ambiguous=true
+        fi
+    fi
+
+    if [ "$state_ambiguous" = true ]; then
+        log_error "CRITICAL: Ambiguous rollback state detected!"
+        log_error "  Live Target        : ${live_target:-unknown}"
+        log_error "  Backup Target      : ${backup_target:-unknown}"
+        log_error "  Recorded Candidate : ${recorded_candidate:-unknown}"
+        log_error "  Recorded Previous  : ${recorded_previous:-unknown}"
+        log_error "Refusing to stop or delete containers. Ambiguous rollback state: manual intervention required!"
+        exit 2
+    fi
+
+    # 6. Execute Rollback
+    log_info "Restoring known-good configuration from backup to /etc/nginx/conf.d/upstream.conf..."
+    if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous 2>/dev/null; then
+        $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"
+    elif [ -s /home/ec2-user/nginx-conf/upstream.conf.bak ]; then
+        printf "%b" "$backup_conf" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/conf.d/upstream.conf"
+    fi
+
+    if [ -d /home/ec2-user/nginx-conf ]; then
+        $DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/conf.d/upstream.conf > /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
+    fi
+
+    if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -t >/dev/null 2>&1; then
+        log_error "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!"
+        exit 2
+    fi
+
+    if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -s reload >/dev/null 2>&1; then
+        log_error "CRITICAL: Restored Nginx reload failed! Manual intervention required!"
+        exit 2
+    fi
+
+    log_info "Restored live reverse proxy to previous slot '$backup_target'. Verifying endpoint recovery..."
+    sleep 2
+    local recovery_output
+    recovery_output=$($CURL_CMD -sf --max-time 5 "$HEALTH_URL" 2>/dev/null || true)
+    if echo "$recovery_output" | grep -q '"status":"healthy"' || echo "$recovery_output" | grep -q '"status": "healthy"'; then
+        log_info "ROLLBACK VERIFIED: Reverse proxy confirmed healthy on previous slot '$backup_target'."
+    else
+        log_error "CRITICAL: Public health check failed after rollback! Manual investigation required!"
+        exit 2
+    fi
+
+    # 7. Candidate Container Cleanup (Protected)
+    local candidate_to_clean="${recorded_candidate:-$live_target}"
+    if [ -n "$candidate_to_clean" ] && [ "$candidate_to_clean" != "$backup_target" ]; then
+        if [ "$candidate_to_clean" != "$NGINX_CONTAINER" ] && \
+           [ "$candidate_to_clean" != "devsecops-mysql" ] && \
+           [ "$candidate_to_clean" != "devsecops-prometheus" ] && \
+           [ "$candidate_to_clean" != "devsecops-grafana" ]; then
+            log_info "Stopped and removed candidate container '$candidate_to_clean'."
+            $DOCKER_CMD stop "$candidate_to_clean" >/dev/null 2>&1 || true
+            $DOCKER_CMD rm -f "$candidate_to_clean" >/dev/null 2>&1 || true
+        else
+            log_warn "Candidate '$candidate_to_clean' is protected infrastructure; skipping removal."
+        fi
+    fi
+
+    # 8. Update State Record
+    ACTIVE_SLOT="${recorded_previous:-$backup_target}"
+    ACTIVE_CONTAINER="${recorded_previous:-$backup_target}"
+    CANDIDATE_SLOT="${recorded_candidate:-$candidate_to_clean}"
+    CANDIDATE_CONTAINER="${recorded_candidate:-$candidate_to_clean}"
+    save_deployment_state "rolled_back" false
+    log_info "Standalone rollback completed successfully."
+}
+
+# ------------------------------------------------------------------------------
 # Error and Signal Trap Handlers
 # ------------------------------------------------------------------------------
 cleanup_on_exit() {
@@ -150,8 +381,20 @@ trap cleanup_on_exit EXIT INT TERM
 # ------------------------------------------------------------------------------
 # 1. Parameter Validation & Lock Acquisition
 # ------------------------------------------------------------------------------
+if [ "${1:-}" = "--rollback" ] || [ "${1:-}" = "rollback" ]; then
+    acquire_lock
+    execute_standalone_rollback "External production verification failed"
+    exit 0
+fi
+
+if [ "${1:-}" = "--mark-verified" ] || [ "${1:-}" = "mark-verified" ]; then
+    acquire_lock
+    mark_verified
+    exit 0
+fi
+
 if [ -z "$DEPLOY_IMAGE" ]; then
-    log_error "Missing required parameter: DEPLOY_IMAGE. Usage: $0 <deploy-image>"
+    log_error "Missing required parameter: DEPLOY_IMAGE. Usage: $0 <deploy-image> | --rollback | --mark-verified"
     exit 1
 fi
 
@@ -427,6 +670,7 @@ if ! $DOCKER_CMD run -d \
     exit 1
 fi
 CANDIDATE_CREATED=true
+save_deployment_state "candidate_started" false
 
 # ------------------------------------------------------------------------------
 # 5. Candidate Bridge-Network Health & Database Connectivity Verification
@@ -568,6 +812,7 @@ perform_rollback() {
     $DOCKER_CMD stop "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
     $DOCKER_CMD rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
 
+    save_deployment_state "rolled_back" false
     log_info "Automated rollback completed successfully."
     exit 1
 }
@@ -594,6 +839,7 @@ if ! $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previo
 fi
 
 log_info "Writing candidate upstream to /etc/nginx/conf.d/upstream.conf..."
+save_deployment_state "cutover_pending" false
 printf "%b" "$CANDIDATE_UPSTREAM_CONTENT" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/conf.d/upstream.conf"
 
 log_info "Executing atomic traffic switch (nginx -s reload)..."
@@ -601,6 +847,7 @@ SWITCH_PERFORMED=true
 if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -s reload; then
     perform_rollback "Nginx reload failed during traffic switch"
 fi
+save_deployment_state "cutover_succeeded" true
 
 # ------------------------------------------------------------------------------
 # 9. Post-Switch Verification on Public Endpoint
@@ -661,4 +908,5 @@ if [ -n "$ACTIVE_CONTAINER" ]; then
     log_info "Instant emergency rollback remains available via Nginx upstream restore."
 fi
 log_info "=================================================================="
+save_deployment_state "standby_ready" true
 exit 0
