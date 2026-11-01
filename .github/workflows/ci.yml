@@ -382,21 +382,20 @@ jobs:
               echo "Applying narrowed include to nginx.conf in-place through verified bind mount..."
               cp /home/ec2-user/nginx-conf/nginx.conf /home/ec2-user/nginx-conf/nginx.conf.bak 2>/dev/null || true
 
-              cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
-events { worker_connections 1024; }
-http {
-    include /etc/nginx/conf.d/upstream.conf;
-    server {
-        listen 80;
-        location / {
-            proxy_pass http://app_backend;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        }
-    }
-}
-NGINX_EOF
+              printf '%s\n' \
+                'events { worker_connections 1024; }' \
+                'http {' \
+                '    include /etc/nginx/conf.d/upstream.conf;' \
+                '    server {' \
+                '        listen 80;' \
+                '        location / {' \
+                '            proxy_pass http://app_backend;' \
+                '            proxy_set_header Host $host;' \
+                '            proxy_set_header X-Real-IP $remote_addr;' \
+                '            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
+                '        }' \
+                '    }' \
+                '}' > /home/ec2-user/nginx-conf/nginx.conf
 
               if ! docker exec devsecops-nginx nginx -t >/dev/null 2>&1; then
                   echo "CRITICAL: In-place nginx.conf update failed syntax check! Reverting to backup..." >&2
@@ -467,21 +466,20 @@ NGINX_EOF
               # 2. Prepare new modular configuration files on host
               echo "upstream app_backend { server ${ACTIVE_TARGET}:5000; }" > /home/ec2-user/nginx-conf/upstream.conf
 
-              cat << 'NGINX_EOF' > /home/ec2-user/nginx-conf/nginx.conf
-          events { worker_connections 1024; }
-          http {
-              include /etc/nginx/conf.d/upstream.conf;
-              server {
-                  listen 80;
-                  location / {
-                      proxy_pass http://app_backend;
-                      proxy_set_header Host $host;
-                      proxy_set_header X-Real-IP $remote_addr;
-                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  }
-              }
-          }
-          NGINX_EOF
+              printf '%s\n' \
+                'events { worker_connections 1024; }' \
+                'http {' \
+                '    include /etc/nginx/conf.d/upstream.conf;' \
+                '    server {' \
+                '        listen 80;' \
+                '        location / {' \
+                '            proxy_pass http://app_backend;' \
+                '            proxy_set_header Host $host;' \
+                '            proxy_set_header X-Real-IP $remote_addr;' \
+                '            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
+                '        }' \
+                '    }' \
+                '}' > /home/ec2-user/nginx-conf/nginx.conf
 
               # 3. Pre-flight validate generated configuration syntax BEFORE disrupting running container
               if ! docker run --rm \
