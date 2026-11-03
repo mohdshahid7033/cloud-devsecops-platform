@@ -50,6 +50,8 @@ def get_overview():
             run.get("status"), run.get("conclusion")
         )
 
+        stages = gh_data.get("stages") or platform_service.get_pipeline_stages()
+        commit_msg = run.get("head_commit", {}).get("message", "").split("\n")[0] if run.get("head_commit") else ""
         latest_pipe = {
             "run_id": str(run.get("id")),
             "run_number": run.get("run_number"),
@@ -59,21 +61,27 @@ def get_overview():
             "raw_status": run.get("status"),
             "branch": run.get("head_branch"),
             "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else "",
+            "commit_message": commit_msg,
             "html_url": run.get("html_url"),
-            "stages": platform_service.get_pipeline_stages(),
-            "created_at": run.get("created_at")
+            "stages": stages,
+            "created_at": run.get("created_at"),
+            "event": run.get("event")
         }
     
-        dep_step = gh_data.get("deploy_step")
-        if dep_step:
-            latest_dep = {
-                "deployment_id": f"DEP-{run.get('id')}",
-                "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
-                "environment": "Production",
-                "deployed_by": "GitHub Actions",
-                "start_time": run.get("updated_at"),
-                "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
-            }
+        # Distinguish Latest Production Deployment from CI runs
+        if gh_data.get("latest_deployment"):
+            latest_dep = gh_data["latest_deployment"]
+        else:
+            dep_step = gh_data.get("deploy_step")
+            if dep_step and dep_step.get("status") in ("PASSED", "SUCCESS") and run.get("event") == "workflow_dispatch":
+                latest_dep = {
+                    "deployment_id": f"DEP-{run.get('id')}",
+                    "status": "SUCCESS",
+                    "environment": "Production",
+                    "deployed_by": "GitHub Actions",
+                    "start_time": run.get("updated_at") or run.get("created_at"),
+                    "commit_hash": str(run.get("head_sha", ""))[:7] if run.get("head_sha") else ""
+                }
 
     if not latest_pipe:
         latest_pipe = database.get_latest_pipeline_run()
@@ -272,7 +280,19 @@ def list_deployments():
     deps = []
     gh_data = platform_service.get_real_github_pipeline_data()
     
-    if gh_data and gh_data.get("run") and gh_data.get("deploy_step"):
+    if gh_data and gh_data.get("latest_deployment"):
+        latest_d = gh_data["latest_deployment"]
+        deps = [{
+            "deployment_id": latest_d.get("deployment_id"),
+            "project_name": "cloud-devsecops-platform",
+            "status": latest_d.get("status", "SUCCESS"),
+            "environment": latest_d.get("environment", "Production"),
+            "deployed_by": latest_d.get("deployed_by", "GitHub Actions"),
+            "start_time": latest_d.get("start_time"),
+            "commit_hash": latest_d.get("commit_hash"),
+            "duration_seconds": latest_d.get("duration_seconds", 0)
+        }]
+    elif gh_data and gh_data.get("run") and gh_data.get("deploy_step") and gh_data["deploy_step"].get("status") in ("PASSED", "SUCCESS"):
         run = gh_data["run"]
         dep_step = gh_data["deploy_step"]
         dur_sec = 0
@@ -284,7 +304,7 @@ def list_deployments():
         deps = [{
             "deployment_id": f"DEP-{run.get('id')}",
             "project_name": "cloud-devsecops-platform",
-            "status": "SUCCESS" if dep_step.get("status") == "PASSED" else "FAILED",
+            "status": "SUCCESS",
             "environment": "Production",
             "deployed_by": "GitHub Actions",
             "start_time": run.get("updated_at"),
@@ -342,16 +362,28 @@ def trigger_deployment():
 def get_pipelines():
     """Retrieve CI/CD pipeline history and real 13-stage verification details."""
     runs = []
-    gh_data = platform_service.get_real_github_pipeline_data()
+    run_id_arg = request.args.get("run_id")
+    gh_data = platform_service.get_real_github_pipeline_data(run_id=run_id_arg)
     telemetry_source = "database_fallback"
     latest_run_info = None
 
     if gh_data and gh_data.get("run"):
         telemetry_source = "github_actions"
         workflow_runs = gh_data.get("runs") or [gh_data["run"]]
-        stages = platform_service.get_pipeline_stages()
+        stages = gh_data.get("stages") or platform_service.get_pipeline_stages()
+        target_run = gh_data["run"]
 
-        for idx, run in enumerate(workflow_runs):
+        # Ensure the targeted CI run (e.g. push run 41472641243) is ordered first
+        ordered_runs = []
+        if target_run:
+            ordered_runs.append(target_run)
+            for r in workflow_runs:
+                if str(r.get("id")) != str(target_run.get("id")):
+                    ordered_runs.append(r)
+        else:
+            ordered_runs = workflow_runs
+
+        for idx, run in enumerate(ordered_runs):
             pipe_status = platform_service.map_github_workflow_status(
                 run.get("status"), run.get("conclusion")
             )
@@ -368,6 +400,7 @@ def get_pipelines():
                 except Exception:
                     dur_sec = None
 
+            is_target = str(run.get("id")) == str(target_run.get("id"))
             run_entry = {
                 "run_id": str(run.get("id")),
                 "run_number": run.get("run_number"),
@@ -383,7 +416,7 @@ def get_pipelines():
                 "event": run.get("event"),
                 "triggered_by": run.get("actor", {}).get("login") if isinstance(run.get("actor"), dict) and run.get("actor", {}).get("login") else (f"GitHub ({run.get('event')})" if run.get("event") else "GitHub Actions"),
                 "duration_seconds": dur_sec,
-                "stages": stages if idx == 0 else []
+                "stages": stages if is_target else []
             }
             runs.append(run_entry)
 
@@ -395,8 +428,9 @@ def get_pipelines():
         stages = platform_service.get_pipeline_stages()
         if runs:
             latest_run_info = runs[0]
-
-    stages = platform_service.get_pipeline_stages()
+        telemetry_source = "database_fallback"
+    else:
+        stages = gh_data.get("stages") or platform_service.get_pipeline_stages()
 
     return jsonify({
         "status": "success",
@@ -405,7 +439,9 @@ def get_pipelines():
         "stages": stages,
         "latest_run": latest_run_info,
         "telemetry_source": telemetry_source,
-        "jobs": gh_data.get("jobs", []) if gh_data else []
+        "telemetry_message": gh_data.get("error") if gh_data else None,
+        "jobs": gh_data.get("jobs", []) if gh_data else [],
+        "latest_deployment": gh_data.get("latest_deployment") if gh_data else None
     })
 
 

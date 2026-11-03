@@ -683,3 +683,396 @@ def test_pipeline_endpoint_no_credentials_exposed(monkeypatch):
         assert test_token not in body
         assert "ghp_" not in body
         assert "Bearer ghp_" not in body
+
+
+# ==============================================================================
+# PIPELINE DASHBOARD ACCURACY & LIVE GITHUB ACTIONS MAPPING TESTS
+# ==============================================================================
+
+def test_accurate_normal_ci_run_mapping():
+    """1 & 4 & 9: Verify normal CI push run accurately maps 8 passed stages and 5 skipped deployment stages."""
+    fake_jobs = [
+        {
+            "name": "Test & Security Scan",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+                {"name": "Checkout code", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:33:24Z", "completed_at": "2026-11-02T15:33:25Z"},
+                {"name": "Check Python", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:33:25Z", "completed_at": "2026-11-02T15:33:27Z"},
+                {"name": "Install dependencies", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:33:27Z", "completed_at": "2026-11-02T15:33:34Z"},
+                {"name": "Run unit & integration tests", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:33:34Z", "completed_at": "2026-11-02T15:33:38Z"},
+                {"name": "SonarQube analysis", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:33:38Z", "completed_at": "2026-11-02T15:34:27Z"},
+                {"name": "Run Trivy filesystem scan", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:34:27Z", "completed_at": "2026-11-02T15:34:34Z"},
+                {"name": "Build Docker image for security scan", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:34:34Z", "completed_at": "2026-11-02T15:34:51Z"},
+                {"name": "Scan Docker image with Trivy", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:34:51Z", "completed_at": "2026-11-02T15:34:52Z"}
+            ]
+        },
+        {"name": "Build & Publish ECR", "status": "completed", "conclusion": "skipped", "steps": []},
+        {"name": "Blue/Green Deployment", "status": "completed", "conclusion": "skipped", "steps": []},
+        {"name": "Verify Production Health", "status": "completed", "conclusion": "skipped", "steps": []}
+    ]
+
+    from app.platform_service import _map_jobs_to_canonical_stages
+    stages = _map_jobs_to_canonical_stages(fake_jobs)
+    assert len(stages) == 13
+
+    # First 8 stages must be PASSED with actual calculated durations
+    passed_stages = [s for s in stages if s["status"] == "PASSED"]
+    assert len(passed_stages) == 8
+    assert stages[0]["id"] == "checkout" and stages[0]["duration"] == "1s"
+    assert stages[1]["id"] == "python-check" and stages[1]["duration"] == "2s"
+    assert stages[2]["id"] == "deps" and stages[2]["duration"] == "7s"
+    assert stages[3]["id"] == "pytest" and stages[3]["duration"] == "4s"
+    assert stages[4]["id"] == "sonarqube" and stages[4]["duration"] == "49s"
+    assert stages[5]["id"] == "trivy-fs" and stages[5]["duration"] == "7s"
+    assert stages[6]["id"] == "docker-build" and stages[6]["duration"] == "17s"
+    assert stages[7]["id"] == "trivy-image" and stages[7]["duration"] == "1s"
+
+    # Remaining 5 deployment stages MUST be SKIPPED with 0s duration, never PASSED
+    skipped_stages = [s for s in stages if s["status"] == "SKIPPED"]
+    assert len(skipped_stages) == 5
+    skipped_ids = [s["id"] for s in skipped_stages]
+    assert skipped_ids == ["aws-config", "ecr-login", "ecr-push", "ssm-deploy", "health-check"]
+    for s in skipped_stages:
+        assert s["duration"] == "0s"
+
+
+def test_failed_ci_run_mapping():
+    """2: Verify failed CI run reflects FAILED accurately without converting to success."""
+    fake_jobs = [
+        {
+            "name": "Test & Security Scan",
+            "status": "completed",
+            "conclusion": "failure",
+            "steps": [
+                {"name": "Checkout code", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:02Z"},
+                {"name": "Check Python", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T10:00:02Z", "completed_at": "2026-11-02T10:00:04Z"},
+                {"name": "Install dependencies", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T10:00:04Z", "completed_at": "2026-11-02T10:00:10Z"},
+                {"name": "Run unit & integration tests", "status": "completed", "conclusion": "failure", "started_at": "2026-11-02T10:00:10Z", "completed_at": "2026-11-02T10:00:15Z"},
+                {"name": "SonarQube analysis", "status": "completed", "conclusion": "skipped"}
+            ]
+        },
+        {"name": "Build & Publish ECR", "status": "completed", "conclusion": "skipped", "steps": []},
+        {"name": "Blue/Green Deployment", "status": "completed", "conclusion": "skipped", "steps": []},
+        {"name": "Verify Production Health", "status": "completed", "conclusion": "skipped", "steps": []}
+    ]
+
+    from app.platform_service import _map_jobs_to_canonical_stages
+    stages = _map_jobs_to_canonical_stages(fake_jobs)
+    pytest_st = next(s for s in stages if s["id"] == "pytest")
+    assert pytest_st["status"] == "FAILED"
+    assert pytest_st["duration"] == "5s"
+
+    sonar_st = next(s for s in stages if s["id"] == "sonarqube")
+    assert sonar_st["status"] == "SKIPPED"
+
+
+def test_running_workflow_mapping():
+    """3: Verify in-progress workflow reflects RUNNING and PENDING, never false PASSED."""
+    fake_jobs = [
+        {
+            "name": "Test & Security Scan",
+            "status": "in_progress",
+            "conclusion": None,
+            "steps": [
+                {"name": "Checkout code", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:01Z"},
+                {"name": "Check Python", "status": "in_progress", "conclusion": None, "started_at": "2026-11-02T10:00:01Z"}
+            ]
+        },
+        {"name": "Build & Publish ECR", "status": "queued", "conclusion": None, "steps": []}
+    ]
+
+    from app.platform_service import _map_jobs_to_canonical_stages
+    stages = _map_jobs_to_canonical_stages(fake_jobs)
+    assert stages[0]["status"] == "PASSED"
+    assert stages[1]["status"] == "RUNNING"
+    assert stages[2]["status"] == "PENDING"
+    assert stages[8]["status"] == "PENDING"  # aws-config in queued job
+
+
+def test_successful_production_deployment_mapping():
+    """5: Verify manual production deployment maps all 13 stages as PASSED with real durations."""
+    fake_jobs = [
+        {
+            "name": "Test & Security Scan",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+                {"name": "Checkout code", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:43:03Z", "completed_at": "2026-11-02T15:43:04Z"},
+                {"name": "Check Python", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:43:04Z", "completed_at": "2026-11-02T15:43:06Z"},
+                {"name": "Install dependencies", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:43:06Z", "completed_at": "2026-11-02T15:43:14Z"},
+                {"name": "Run unit & integration tests", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:43:14Z", "completed_at": "2026-11-02T15:43:18Z"},
+                {"name": "SonarQube analysis", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:43:18Z", "completed_at": "2026-11-02T15:44:04Z"},
+                {"name": "Run Trivy filesystem scan", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:44:04Z", "completed_at": "2026-11-02T15:44:11Z"},
+                {"name": "Build Docker image for security scan", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:44:11Z", "completed_at": "2026-11-02T15:44:30Z"},
+                {"name": "Scan Docker image with Trivy", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:44:30Z", "completed_at": "2026-11-02T15:44:30Z"}
+            ]
+        },
+        {
+            "name": "Build & Publish ECR",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+                {"name": "Configure AWS credentials (GitHub OIDC)", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:44:44Z", "completed_at": "2026-11-02T15:44:46Z"},
+                {"name": "Login to Amazon ECR", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:44:46Z", "completed_at": "2026-11-02T15:44:48Z"},
+                {"name": "Build, tag, and push image to ECR", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:44:48Z", "completed_at": "2026-11-02T15:45:09Z"}
+            ]
+        },
+        {
+            "name": "Blue/Green Deployment",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+                {"name": "Execute Blue/Green deployment via SSM", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:45:27Z", "completed_at": "2026-11-02T15:45:57Z"}
+            ]
+        },
+        {
+            "name": "Verify Production Health",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+                {"name": "Verify production endpoint health", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T15:46:19Z", "completed_at": "2026-11-02T15:46:20Z"}
+            ]
+        }
+    ]
+
+    from app.platform_service import _map_jobs_to_canonical_stages
+    stages = _map_jobs_to_canonical_stages(fake_jobs)
+    assert len(stages) == 13
+    assert all(s["status"] == "PASSED" for s in stages)
+    assert stages[8]["id"] == "aws-config" and stages[8]["duration"] == "2s"
+    assert stages[9]["id"] == "ecr-login" and stages[9]["duration"] == "2s"
+    assert stages[10]["id"] == "ecr-push" and stages[10]["duration"] == "21s"
+    assert stages[11]["id"] == "ssm-deploy" and stages[11]["duration"] == "30s"
+    assert stages[12]["id"] == "health-check" and stages[12]["duration"] == "1s"
+
+
+def test_separation_between_ci_run_and_production_deployment():
+    """6: Verify latest CI run (with skipped deployment) does NOT overwrite production deployment."""
+    ci_push_run = {
+        "id": 41472641243,
+        "run_number": 312,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "eb778b1000000000000000000000000000000000",
+        "created_at": "2026-11-02T15:33:00Z",
+        "updated_at": "2026-11-02T15:34:53Z"
+    }
+    prod_deploy_run = {
+        "id": 41474256894,
+        "run_number": 313,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": "eb778b1000000000000000000000000000000000",
+        "created_at": "2026-11-02T15:42:40Z",
+        "updated_at": "2026-11-02T15:46:21Z",
+        "actor": {"login": "mohdshahid7033"}
+    }
+
+    # Simulate user pushing a new commit (CI push is latest)
+    payload = {
+        "run": ci_push_run,
+        "runs": [ci_push_run, prod_deploy_run],
+        "stages": [
+            {"id": "checkout", "name": "Checkout code", "status": "PASSED", "duration": "1s"},
+            {"id": "python-check", "name": "Check Python", "status": "PASSED", "duration": "2s"},
+            {"id": "deps", "name": "Install dependencies", "status": "PASSED", "duration": "7s"},
+            {"id": "pytest", "name": "Run tests (pytest)", "status": "PASSED", "duration": "4s"},
+            {"id": "sonarqube", "name": "SonarQube analysis", "status": "PASSED", "duration": "49s"},
+            {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "PASSED", "duration": "7s"},
+            {"id": "docker-build", "name": "Build Docker image", "status": "PASSED", "duration": "17s"},
+            {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "PASSED", "duration": "1s"},
+            {"id": "aws-config", "name": "Configure AWS credentials", "status": "SKIPPED", "duration": "0s"},
+            {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "SKIPPED", "duration": "0s"},
+            {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "SKIPPED", "duration": "0s"},
+            {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "SKIPPED", "duration": "0s"},
+            {"id": "health-check", "name": "Application health check", "status": "SKIPPED", "duration": "0s"}
+        ],
+        "latest_deployment": {
+            "deployment_id": "DEP-41474256894",
+            "commit_hash": "eb778b1",
+            "status": "SUCCESS",
+            "environment": "Production",
+            "deployed_by": "GitHub Actions (mohdshahid7033)",
+            "start_time": "2026-11-02T15:46:21Z",
+            "duration_seconds": 221
+        },
+        "telemetry_source": "github_actions",
+        "last_fetched": 1000.0
+    }
+
+    client = app.test_client()
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=payload):
+        res = client.get("/api/platform/overview")
+        assert res.status_code == 200
+        data = res.json["metrics"]
+
+        # Latest CI run reports the push run
+        assert data["latest_pipeline_run"]["run_id"] == "41472641243"
+        assert data["latest_pipeline_run"]["status"] == "PASSED"
+        pipe_stages = data["latest_pipeline_run"]["stages"]
+        assert len(pipe_stages) == 13
+        assert sum(1 for s in pipe_stages if s["status"] == "PASSED") == 8
+        assert sum(1 for s in pipe_stages if s["status"] == "SKIPPED") == 5
+
+        # Latest production deployment reports the deployment run, NOT the push run
+        assert data["latest_deployment"]["deployment_id"] == "DEP-41474256894"
+        assert data["latest_deployment"]["status"] == "SUCCESS"
+        assert data["deployment_status"] == "Healthy / Live"
+
+
+def test_missing_github_token_handling(monkeypatch):
+    """7: Verify missing GitHub token handles gracefully and returns honest telemetry."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    from app.platform_service import _get_github_token
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.side_effect = Exception("No git credential helper")
+        token = _get_github_token()
+        assert token == ""
+
+
+def test_github_api_errors_handling():
+    """8: Verify GitHub API HTTP 403, 500, or network errors are handled gracefully."""
+    client = app.test_client()
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=None):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        assert res.json["telemetry_source"] == "database_fallback"
+
+
+def test_no_fabricated_success_or_duration():
+    """10: Verify default stages when telemetry is unavailable do NOT fabricate PASSED or 310s duration."""
+    from app.platform_service import get_pipeline_stages
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=None):
+        stages = get_pipeline_stages()
+        assert len(stages) == 13
+        for s in stages:
+            assert s["status"] == "NOT_RUN"
+            assert s["duration"] == "0s"
+
+
+def test_pipelines_endpoint_returns_push_run_with_skipped_deployment():
+    """Verify /api/platform/pipelines returns run 41472641243 (event push) with skipped deployment stages and separate deployment."""
+    ci_push_run = {
+        "id": 41472641243,
+        "run_number": 312,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "eb778b1000000000000000000000000000000000",
+        "created_at": "2026-11-02T15:33:00Z",
+        "updated_at": "2026-11-02T15:34:53Z"
+    }
+    prod_deploy_run = {
+        "id": 41474256894,
+        "run_number": 313,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": "eb778b1000000000000000000000000000000000",
+        "created_at": "2026-11-02T15:42:40Z",
+        "updated_at": "2026-11-02T15:46:21Z",
+        "actor": {"login": "mohdshahid7033"}
+    }
+
+    stages = [
+        {"id": "checkout", "name": "Checkout code", "status": "PASSED", "duration": "1s"},
+        {"id": "python-check", "name": "Check Python", "status": "PASSED", "duration": "2s"},
+        {"id": "deps", "name": "Install dependencies", "status": "PASSED", "duration": "7s"},
+        {"id": "pytest", "name": "Run tests (pytest)", "status": "PASSED", "duration": "4s"},
+        {"id": "sonarqube", "name": "SonarQube analysis", "status": "PASSED", "duration": "49s"},
+        {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "PASSED", "duration": "7s"},
+        {"id": "docker-build", "name": "Build Docker image", "status": "PASSED", "duration": "17s"},
+        {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "PASSED", "duration": "1s"},
+        {"id": "aws-config", "name": "Configure AWS credentials", "status": "SKIPPED", "duration": "0s"},
+        {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "SKIPPED", "duration": "0s"},
+        {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "SKIPPED", "duration": "0s"},
+        {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "SKIPPED", "duration": "0s"},
+        {"id": "health-check", "name": "Application health check", "status": "SKIPPED", "duration": "0s"}
+    ]
+
+    payload = {
+        "run": ci_push_run,
+        "runs": [ci_push_run, prod_deploy_run],
+        "stages": stages,
+        "jobs": [
+            {"id": 1, "name": "Test & Security Scan", "status": "completed", "conclusion": "success"},
+            {"id": 2, "name": "Build & Publish ECR", "status": "completed", "conclusion": "skipped"},
+            {"id": 3, "name": "Blue/Green Deployment", "status": "completed", "conclusion": "skipped"},
+            {"id": 4, "name": "Verify Production Health", "status": "completed", "conclusion": "skipped"}
+        ],
+        "latest_deployment": {
+            "deployment_id": "DEP-41474256894",
+            "commit_hash": "eb778b1",
+            "status": "SUCCESS",
+            "environment": "Production",
+            "deployed_by": "GitHub Actions (mohdshahid7033)",
+            "start_time": "2026-11-02T15:46:21Z",
+            "duration_seconds": 221
+        },
+        "telemetry_source": "github_actions",
+        "last_fetched": 1000.0
+    }
+
+    client = app.test_client()
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=payload):
+        res = client.get("/api/platform/pipelines")
+        assert res.status_code == 200
+        data = res.json
+
+        # Must return the push run
+        assert data["latest_run"]["run_id"] == "41472641243"
+        assert data["latest_run"]["event"] == "push"
+        assert data["latest_run"]["status"] == "PASSED"
+
+        # Stages must show 8 passed and 5 skipped
+        out_stages = data["stages"]
+        assert len(out_stages) == 13
+        assert sum(1 for s in out_stages if s["status"] == "PASSED") == 8
+        assert sum(1 for s in out_stages if s["status"] == "SKIPPED") == 5
+        for s in out_stages[8:]:
+            assert s["status"] == "SKIPPED"
+            assert s["duration"] == "0s"
+
+        # Separate deployment is preserved
+        assert data["latest_deployment"]["deployment_id"] == "DEP-41474256894"
+        assert data["latest_deployment"]["status"] == "SUCCESS"
+
+
+def test_missing_or_unestablished_step_returns_unknown_or_not_run():
+    """Verify that if GitHub job steps cannot establish a stage, it displays NOT_RUN or UNKNOWN rather than PASSED."""
+    fake_jobs = [
+        {
+            "id": 999,
+            "name": "Test & Security Scan",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+                {"name": "Checkout code", "status": "completed", "conclusion": "success", "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:01Z"}
+                # All other steps are missing from the job
+            ]
+        }
+    ]
+
+    from app.platform_service import _map_jobs_to_canonical_stages
+    stages = _map_jobs_to_canonical_stages(fake_jobs)
+    assert stages[0]["id"] == "checkout"
+    assert stages[0]["status"] == "PASSED"
+
+    # All unestablished steps must be UNKNOWN or NOT_RUN, NEVER PASSED
+    for s in stages[1:]:
+        assert s["status"] in ("NOT_RUN", "UNKNOWN")
+        assert s["status"] != "PASSED"
+        assert s["duration"] == "0s"

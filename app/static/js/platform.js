@@ -590,6 +590,10 @@ async function loadPipelines() {
         telemBadge.textContent = 'GitHub Actions Live';
         telemBadge.className = 'status-badge info';
         telemBadge.style.display = 'inline-block';
+      } else if (data.telemetry_source === 'unavailable') {
+        telemBadge.textContent = 'Telemetry Unavailable';
+        telemBadge.className = 'status-badge warning';
+        telemBadge.style.display = 'inline-block';
       } else {
         telemBadge.textContent = 'Database Telemetry';
         telemBadge.className = 'status-badge';
@@ -723,6 +727,10 @@ async function loadPipelines() {
       } else if (passed === stages.length) {
         badge.textContent = `${passed}/${stages.length} Completed`;
         badge.className = 'status-badge success';
+      } else if (stages.some(s => s.status === 'SKIPPED') && passed > 0 && !failed) {
+        const skipped = stages.filter(s => s.status === 'SKIPPED').length;
+        badge.textContent = `${passed}/${stages.length} Passed (${skipped} Skipped)`;
+        badge.className = 'status-badge success';
       } else {
         badge.textContent = `${passed}/${stages.length} Completed`;
         badge.className = 'status-badge warning';
@@ -733,7 +741,8 @@ async function loadPipelines() {
     const sidebarBadge = document.getElementById('sidebar-pipeline-badge');
     if (sidebarBadge && stages.length > 0) {
       sidebarBadge.textContent = `${passed}/${stages.length}`;
-      sidebarBadge.className = `nav-badge ${passed === stages.length ? 'text-success' : ''}`;
+      const skippedCount = stages.filter(s => s.status === 'SKIPPED').length;
+      sidebarBadge.className = `nav-badge ${passed === stages.length || (passed + skippedCount === stages.length && !failed) ? 'text-success' : ''}`;
     }
 
     // 2. Render pipeline stage detail list

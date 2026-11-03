@@ -53,6 +53,14 @@ def probe_endpoint(candidates, port, timeout=0.25):
             seen.add(h)
             cleaned.append(h)
 
+    # In Windows/host environments, prioritize 127.0.0.1/localhost first.
+    # Non-localhost hostnames (e.g. host.docker.internal, devsecops-nginx) cause expensive
+    # 2-4s NetBIOS/DNS resolution timeouts when services aren't running.
+    if os.name == "nt":
+        local_cand = [h for h in cleaned if h in ("127.0.0.1", "localhost", "0.0.0.0")]
+        if local_cand:
+            cleaned = local_cand
+
     for host in cleaned:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
@@ -1109,8 +1117,36 @@ def run_diagnostics():
 # Cache for GitHub pipeline stages to avoid rate limits
 _github_cache = {
     "data": None,
-    "last_fetched": 0
+    "last_fetched": 0,
+    "error": None
 }
+
+
+def _get_github_token():
+    """
+    Safely retrieve GitHub token from environment variables or Git Credential Manager.
+    Never exposes or logs the token.
+    """
+    token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        p = subprocess.Popen(
+            ["git", "credential", "fill"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        out, _ = p.communicate("protocol=https\nhost=github.com\n", timeout=2)
+        creds = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        cand = creds.get("password", "").strip()
+        if cand:
+            return cand
+    except Exception:
+        pass
+    return ""
+
 
 def map_github_workflow_status(gh_status, gh_conclusion=None):
     """
@@ -1141,15 +1177,20 @@ def map_github_workflow_status(gh_status, gh_conclusion=None):
     return "UNKNOWN"
 
 
-def get_real_github_pipeline_data():
-    """Fetch pipeline data from real GitHub Actions run API with caching."""
+def get_real_github_pipeline_data(run_id=None):
+    """
+    Fetch pipeline data from real GitHub Actions runs and jobs API with caching.
+    Accurately maps jobs and steps to the 13 canonical stages without fabricating success.
+    Distinguishes the latest normal CI run from the latest production deployment.
+    """
     global _github_cache
 
-    # Return cached data if younger than 15 seconds (respecting GitHub API rate limits while maintaining near real-time)
-    if _github_cache["data"] and time.time() - _github_cache["last_fetched"] < 15:
-        return _github_cache["data"]
+    cache_key = f"run_{run_id}" if run_id else "ci_run"
+    cached_entry = _github_cache.get(cache_key)
+    if isinstance(cached_entry, dict) and (time.time() - cached_entry.get("last_fetched", 0) < 15):
+        return cached_entry.get("data")
 
-    token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
+    token = _get_github_token()
     repo = "mohdshahid7033/cloud-devsecops-platform"
     headers = {
         "Accept": "application/vnd.github+json",
@@ -1160,167 +1201,300 @@ def get_real_github_pipeline_data():
         headers["Authorization"] = f"Bearer {token}"
 
     try:
-        url_runs = f"https://api.github.com/repos/{repo}/actions/runs?per_page=5"
+        url_runs = f"https://api.github.com/repos/{repo}/actions/runs?per_page=10"
         req_runs = urllib.request.Request(url_runs, headers=headers)
         with urllib.request.urlopen(req_runs, timeout=5) as resp:
             runs_data = json.loads(resp.read().decode())
 
         runs = runs_data.get("workflow_runs", [])
         if not runs:
-            if _github_cache["data"]:
+            if isinstance(cached_entry, dict):
+                return cached_entry.get("data")
+            if _github_cache.get("data"):
                 return _github_cache["data"]
             return None
 
-        latest_run = runs[0]
-        run_id = latest_run.get("id")
+        # 1. Identify the latest normal CI push run
+        ci_run = next((r for r in runs if r.get("event") == "push"), None)
+        if not ci_run:
+            ci_run = next((r for r in runs if r.get("event") in ("push", "pull_request")), runs[0])
 
-        url_jobs = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
+        # 2. Select the target run for stages & jobs
+        if run_id:
+            target_run = next((r for r in runs if str(r.get("id")) == str(run_id)), None)
+            if not target_run:
+                target_run = ci_run
+        else:
+            target_run = ci_run
+
+        target_run_id = target_run.get("id")
+        url_jobs = f"https://api.github.com/repos/{repo}/actions/runs/{target_run_id}/jobs"
         req_jobs = urllib.request.Request(url_jobs, headers=headers)
         with urllib.request.urlopen(req_jobs, timeout=5) as resp:
             jobs_data = json.loads(resp.read().decode())
 
         jobs = jobs_data.get("jobs", [])
-        stages = []
-        if jobs:
-            # Test job should contain the 13 steps
-            test_job = jobs[0]
-            for step in test_job.get("steps", []):
-                name = step.get("name")
-                OFFICIAL_STAGES = {
-                    "Checkout code",
-                    "Check Python",
-                    "Install dependencies",
-                    "Run tests",
-                    "SonarQube analysis",
-                    "Run Trivy filesystem scan",
-                    "Build Docker image",
-                    "Scan Docker image with Trivy",
-                    "Configure AWS credentials",
-                    "Login to Amazon ECR",
-                    "Push Docker image to ECR",
-                    "Deploy to EC2 via SSM",
-                    "Application health check"
-                }
-                if name not in OFFICIAL_STAGES:
-                    continue
+        stages = _map_jobs_to_canonical_stages(jobs)
 
-                gh_status = step.get("status")
-                gh_conclusion = step.get("conclusion")
-                dashboard_status = map_github_workflow_status(gh_status, gh_conclusion)
+        # 3. Separately identify the latest production deployment (workflow_dispatch)
+        latest_deployment = None
+        deploy_run = next(
+            (r for r in runs if r.get("event") == "workflow_dispatch"),
+            None
+        )
+        if deploy_run:
+            dep_id = f"DEP-{deploy_run.get('id')}"
+            dep_commit = str(deploy_run.get("head_sha", ""))[:7]
+            dep_conc = deploy_run.get("conclusion")
+            dep_status = "SUCCESS" if dep_conc == "success" else (
+                "FAILED" if dep_conc in ("failure", "timed_out") else
+                map_github_workflow_status(deploy_run.get("status"), dep_conc)
+            )
+            s_time = deploy_run.get("updated_at") or deploy_run.get("created_at")
+            dur = 0
+            if deploy_run.get("created_at") and deploy_run.get("updated_at"):
+                try:
+                    s_t = datetime.strptime(deploy_run["created_at"].replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    c_t = datetime.strptime(deploy_run["updated_at"].replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    dur = max(0, int((c_t - s_t).total_seconds()))
+                except Exception:
+                    dur = 0
 
-                started_at = step.get("started_at")
-                completed_at = step.get("completed_at")
-                duration_str = "0s"
-                if started_at and completed_at:
-                    try:
-                        s_t = datetime.strptime(started_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
-                        c_t = datetime.strptime(completed_at.replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
-                        dur_sec = int((c_t - s_t).total_seconds())
-                        duration_str = f"{dur_sec}s"
-                    except Exception:
-                        pass
-
-                id_mapping = {
-                    "Checkout code": "checkout",
-                    "Check Python": "python-check",
-                    "Install dependencies": "deps",
-                    "Run tests": "pytest",
-                    "SonarQube analysis": "sonarqube",
-                    "Run Trivy filesystem scan": "trivy-fs",
-                    "Build Docker image": "docker-build",
-                    "Scan Docker image with Trivy": "trivy-image",
-                    "Configure AWS credentials": "aws-config",
-                    "Login to Amazon ECR": "ecr-login",
-                    "Push Docker image to ECR": "ecr-push",
-                    "Deploy to EC2 via SSM": "ssm-deploy",
-                    "Application health check": "health-check"
-                }
-
-                stages.append({
-                    "id": id_mapping.get(name, name.lower().replace(" ", "-").replace("(", "").replace(")", "")),
-                    "name": name,
-                    "status": dashboard_status,
-                    "duration": duration_str,
-                    "command": "GitHub Actions Step"
-                })
+            actor = deploy_run.get("actor", {}).get("login") if isinstance(deploy_run.get("actor"), dict) else "workflow_dispatch"
+            msg = deploy_run.get("head_commit", {}).get("message", "").split("\n")[0] if deploy_run.get("head_commit") else "Production Deployment via SSM"
+            latest_deployment = {
+                "deployment_id": dep_id,
+                "project_id": "proj-abc-demo",
+                "commit_hash": dep_commit,
+                "commit_message": msg,
+                "branch": deploy_run.get("head_branch", "main"),
+                "environment": "Production",
+                "status": dep_status,
+                "start_time": s_time,
+                "duration_seconds": dur,
+                "deployed_by": f"GitHub Actions ({actor})",
+                "target_instance": "i-0fb9dcbeb35b4fdbe",
+                "ecr_image": f"850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:{dep_commit}"
+            }
 
         data = {
             "stages": stages,
-            "run": latest_run,
+            "run": target_run,
+            "ci_run": ci_run,
             "runs": runs,
             "jobs": jobs,
-            "trivy_step": next((s for s in stages if "trivy image" in s["name"].lower() or "trivy filesystem" in s["name"].lower()), None),
-            "deploy_step": next((s for s in stages if "deploy to ec2" in s["name"].lower()), None),
+            "latest_deployment": latest_deployment,
+            "trivy_step": next((s for s in stages if "trivy" in s["id"].lower()), None),
+            "deploy_step": next((s for s in stages if "deploy" in s["id"].lower() or "ssm" in s["id"].lower()), None),
             "telemetry_source": "github_actions",
             "last_fetched": time.time()
         }
+        _github_cache[cache_key] = {"data": data, "last_fetched": time.time()}
         _github_cache["data"] = data
         _github_cache["last_fetched"] = time.time()
+        _github_cache["error"] = None
         return data
+
     except urllib.error.HTTPError as e:
-        logger.error(f"GitHub API HTTP error: {e.code} - {e.reason}")
-        if _github_cache["data"]:
+        logger.warning(f"GitHub API HTTP error: {e.code} - {e.reason}")
+        if e.code == 403:
+            _github_cache["error"] = "GitHub Actions API rate limit exceeded. Telemetry temporarily unavailable."
+        elif e.code == 401:
+            _github_cache["error"] = "GitHub token unauthorized or expired."
+        else:
+            _github_cache["error"] = f"GitHub API error ({e.code})."
+        cached_entry = _github_cache.get(cache_key)
+        if isinstance(cached_entry, dict):
+            return cached_entry.get("data")
+        if _github_cache.get("data"):
+            return _github_cache["data"]
+        return None
+    except urllib.error.URLError as e:
+        logger.warning(f"GitHub API network error: {e.reason}")
+        _github_cache["error"] = f"GitHub network unreachable: {e.reason}"
+        cached_entry = _github_cache.get(cache_key)
+        if isinstance(cached_entry, dict):
+            return cached_entry.get("data")
+        if _github_cache.get("data"):
             return _github_cache["data"]
         return None
     except Exception as e:
-        logger.error(f"Failed to fetch GitHub pipeline stages: {e}")
-        if _github_cache["data"]:
+        logger.error(f"Failed to fetch GitHub pipeline data: {e}")
+        _github_cache["error"] = "Failed to fetch GitHub Actions telemetry."
+        cached_entry = _github_cache.get(cache_key)
+        if isinstance(cached_entry, dict):
+            return cached_entry.get("data")
+        if _github_cache.get("data"):
             return _github_cache["data"]
         return None
 
 
-def get_pipeline_stages():
+def _map_jobs_to_canonical_stages(jobs):
     """
-    Return the verification stages mapped directly to GitHub Actions CI/CD workflow (.github/workflows/ci.yml).
-    Prefers the verified CI/CD workflow run record from the actual GitHub Actions API if token is present.
+    Map GitHub Actions jobs and steps to the 13 canonical pipeline stages.
+    Accurately maps stages using actual job IDs, job conclusions, and step execution data.
+    Ensures skipped deployment jobs always reflect SKIPPED with 0s duration.
+    If a stage cannot be established from GitHub data, displays NOT_RUN or UNKNOWN rather than PASSED.
     """
-    default_stages = [
-        {"id": "checkout", "name": "Checkout code", "status": "PENDING", "duration": "0s", "command": "actions/checkout@v4"},
-        {"id": "python-check", "name": "Check Python", "status": "PENDING", "duration": "0s", "command": "python --version; pip --version"},
-        {"id": "deps", "name": "Install dependencies", "status": "PENDING", "duration": "0s", "command": "pip install -r app/requirements.txt pytest awscli"},
-        {"id": "pytest", "name": "Run tests", "status": "PENDING", "duration": "0s", "command": "pytest"},
-        {"id": "sonarqube", "name": "SonarQube analysis", "status": "PENDING", "duration": "0s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
-        {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "PENDING", "duration": "0s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
-        {"id": "docker-build", "name": "Build Docker image", "status": "PENDING", "duration": "0s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
-        {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "PENDING", "duration": "0s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
-        {"id": "aws-config", "name": "Configure AWS credentials", "status": "PENDING", "duration": "0s", "command": "aws-actions/configure-aws-credentials@v4"},
-        {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "PENDING", "duration": "0s", "command": "aws-actions/amazon-ecr-login@v2"},
-        {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "PENDING", "duration": "0s", "command": "docker push"},
-        {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "PENDING", "duration": "0s", "command": "aws ssm send-command"},
-        {"id": "health-check", "name": "Application health check", "status": "PENDING", "duration": "0s", "command": "curl -f http://localhost/health"}
+    stage_defs = [
+        {"id": "checkout", "name": "Checkout code", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"checkout"]},
+        {"id": "python-check", "name": "Check Python", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"check python", r"setup python"]},
+        {"id": "deps", "name": "Install dependencies", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"install dependencies"]},
+        {"id": "pytest", "name": "Run tests (pytest)", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"run.*test", r"pytest"]},
+        {"id": "sonarqube", "name": "SonarQube analysis", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"sonarqube"]},
+        {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"trivy filesystem"]},
+        {"id": "docker-build", "name": "Build Docker image", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"build docker image"]},
+        {"id": "trivy-image", "name": "Scan Docker image with Trivy", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"scan docker image", r"trivy image"]},
+        {"id": "aws-config", "name": "Configure AWS credentials", "job_keys": ["publish-ecr", "ecr", "publish"], "step_patterns": [r"configure aws"]},
+        {"id": "ecr-login", "name": "Login to Amazon ECR", "job_keys": ["publish-ecr", "ecr", "publish"], "step_patterns": [r"login to amazon ecr", r"ecr login"]},
+        {"id": "ecr-push", "name": "Push Docker image to ECR", "job_keys": ["publish-ecr", "ecr", "publish"], "step_patterns": [r"push.*ecr", r"build.*push.*ecr"]},
+        {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "job_keys": ["deploy-blue-green", "deploy", "blue-green"], "step_patterns": [r"blue/green", r"ssm", r"deploy to ec2"]},
+        {"id": "health-check", "name": "Application health check", "job_keys": ["verify-production", "verify", "health"], "step_patterns": [r"health check", r"verify production"]}
     ]
 
-    github_data = get_real_github_pipeline_data()
-    stages = []
+    job_map = {}
+    for j in (jobs or []):
+        j_name = j.get("name", "").lower()
+        if "test" in j_name or "scan" in j_name:
+            job_map["test-and-scan"] = j
+        elif "ecr" in j_name or "publish" in j_name:
+            job_map["publish-ecr"] = j
+        elif "deploy" in j_name or "blue" in j_name:
+            job_map["deploy-blue-green"] = j
+        elif "verify" in j_name or "health" in j_name:
+            job_map["verify-production"] = j
 
-    if github_data:
-        stages = default_stages
-        gh_stages = github_data.get("stages", [])
-        if gh_stages:
-            for default_st in stages:
-                match = next((s for s in gh_stages if s["name"] == default_st["name"]), None)
-                if match:
-                    default_st["status"] = match["status"]
-                    default_st["duration"] = match["duration"]
-                    if match.get("id"):
-                        default_st["id"] = match["id"]
-    else:
-        found_db_stages = None
-        runs = database.get_pipeline_runs(limit=10)
-        for r in runs:
-            if r.get("duration_seconds", 0) > 60 and r.get("stages"):
-                found_db_stages = [dict(s) for s in r["stages"]]
+    stages = []
+    for s_def in stage_defs:
+        job = None
+        for jk in s_def["job_keys"]:
+            if jk in job_map:
+                job = job_map[jk]
                 break
 
-        if not found_db_stages:
-            latest_run = database.get_latest_pipeline_run()
-            if latest_run and latest_run.get("stages"):
-                found_db_stages = [dict(s) for s in latest_run["stages"]]
+        if not job:
+            stages.append({
+                "id": s_def["id"],
+                "name": s_def["name"],
+                "status": "NOT_RUN",
+                "duration": "0s",
+                "command": "GitHub Actions Step"
+            })
+            continue
 
-        stages = found_db_stages if found_db_stages else default_stages
+        job_id = job.get("id")
+        job_status = job.get("status")
+        job_conclusion = job.get("conclusion")
 
-    for st in stages:
-        if st.get("id") == "pytest" and "pytest" not in st.get("name", "").lower():
-            st["name"] = f"{st['name']} (pytest)"
+        # 1. Skipped parent job: all its stages MUST be SKIPPED
+        if job_conclusion == "skipped":
+            stages.append({
+                "id": s_def["id"],
+                "name": s_def["name"],
+                "status": "SKIPPED",
+                "duration": "0s",
+                "job_id": job_id,
+                "command": "GitHub Actions Step"
+            })
+            continue
+
+        # 2. Cancelled parent job
+        if job_conclusion == "cancelled":
+            stages.append({
+                "id": s_def["id"],
+                "name": s_def["name"],
+                "status": "CANCELLED",
+                "duration": "0s",
+                "job_id": job_id,
+                "command": "GitHub Actions Step"
+            })
+            continue
+
+        # 3. Queued parent job or running without steps yet
+        if job_status == "queued" or (job_status != "completed" and not job.get("steps")):
+            stages.append({
+                "id": s_def["id"],
+                "name": s_def["name"],
+                "status": "PENDING",
+                "duration": "0s",
+                "job_id": job_id,
+                "command": "GitHub Actions Step"
+            })
+            continue
+
+        matching_step = None
+        for step in job.get("steps", []):
+            st_name = step.get("name", "")
+            if any(re.search(pat, st_name, re.IGNORECASE) for pat in s_def["step_patterns"]):
+                matching_step = step
+                break
+
+        if matching_step:
+            step_status = map_github_workflow_status(matching_step.get("status"), matching_step.get("conclusion"))
+            s_at = matching_step.get("started_at")
+            c_at = matching_step.get("completed_at")
+            dur = "0s"
+            if s_at and c_at and step_status != "SKIPPED":
+                try:
+                    s_t = datetime.strptime(s_at.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    c_t = datetime.strptime(c_at.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+                    dur = f"{max(0, int((c_t - s_t).total_seconds()))}s"
+                except Exception:
+                    pass
+            stages.append({
+                "id": s_def["id"],
+                "name": s_def["name"],
+                "status": step_status,
+                "duration": dur,
+                "job_id": job_id,
+                "command": "GitHub Actions Step"
+            })
+        else:
+            # Step cannot be established: Display UNKNOWN or NOT_RUN rather than PASSED
+            stage_st = "NOT_RUN"
+            if job_status == "in_progress":
+                stage_st = "PENDING"
+            elif job_conclusion == "failure":
+                stage_st = "FAILED" if s_def["id"] in ("pytest", "docker-build") else "NOT_RUN"
+            else:
+                stage_st = "UNKNOWN"
+
+            stages.append({
+                "id": s_def["id"],
+                "name": s_def["name"],
+                "status": stage_st,
+                "duration": "0s",
+                "job_id": job_id,
+                "command": "GitHub Actions Step"
+            })
 
     return stages
+
+
+def get_pipeline_stages(run_id=None):
+    """
+    Return the verification stages mapped directly to GitHub Actions CI/CD workflow (.github/workflows/ci.yml).
+    Prefers the verified CI/CD workflow run record from the actual GitHub Actions API.
+    Does NOT fabricate success statuses or durations when telemetry is unavailable.
+    """
+    default_stages = [
+        {"id": "checkout", "name": "Checkout code", "status": "NOT_RUN", "duration": "0s", "command": "actions/checkout@v4"},
+        {"id": "python-check", "name": "Check Python", "status": "NOT_RUN", "duration": "0s", "command": "python --version; pip --version"},
+        {"id": "deps", "name": "Install dependencies", "status": "NOT_RUN", "duration": "0s", "command": "pip install -r app/requirements.txt pytest awscli"},
+        {"id": "pytest", "name": "Run tests (pytest)", "status": "NOT_RUN", "duration": "0s", "command": "pytest"},
+        {"id": "sonarqube", "name": "SonarQube analysis", "status": "NOT_RUN", "duration": "0s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
+        {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "NOT_RUN", "duration": "0s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
+        {"id": "docker-build", "name": "Build Docker image", "status": "NOT_RUN", "duration": "0s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
+        {"id": "trivy-image", "name": "Scan Docker image with Trivy", "status": "NOT_RUN", "duration": "0s", "command": "trivy image --severity HIGH,CRITICAL devsecops-platform:latest"},
+        {"id": "aws-config", "name": "Configure AWS credentials", "status": "NOT_RUN", "duration": "0s", "command": "aws-actions/configure-aws-credentials@v4"},
+        {"id": "ecr-login", "name": "Login to Amazon ECR", "status": "NOT_RUN", "duration": "0s", "command": "aws-actions/amazon-ecr-login@v2"},
+        {"id": "ecr-push", "name": "Push Docker image to ECR", "status": "NOT_RUN", "duration": "0s", "command": "docker push"},
+        {"id": "ssm-deploy", "name": "Deploy to EC2 via SSM", "status": "NOT_RUN", "duration": "0s", "command": "aws ssm send-command"},
+        {"id": "health-check", "name": "Application health check", "status": "NOT_RUN", "duration": "0s", "command": "curl -f http://localhost/health"}
+    ]
+
+    github_data = get_real_github_pipeline_data(run_id=run_id)
+    if github_data and github_data.get("stages"):
+        return github_data["stages"]
+
+    return default_stages
