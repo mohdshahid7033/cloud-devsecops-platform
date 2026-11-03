@@ -84,8 +84,11 @@ with urllib.request.urlopen(req) as resp:
 # 6. Direct MySQL record verification
 print("\n[6] Verifying record exists in MySQL database:")
 conn = pymysql.connect(
-    host="localhost", port=3306, user="devsecops_user",
-    password="devsecops_pass", database="devsecops_db"
+    host=os.getenv("DB_HOST", "localhost"),
+    port=int(os.getenv("DB_PORT", "3306")),
+    user=os.getenv("DB_USER", "devsecops_user"),
+    password=os.getenv("DB_PASSWORD", "local_db_pass_example"),
+    database=os.getenv("DB_NAME", "devsecops_db")
 )
 with conn.cursor() as cur:
     cur.execute("SELECT reference_id, name, email, company, service, status FROM consultation_requests WHERE reference_id = %s", (ref_id,))

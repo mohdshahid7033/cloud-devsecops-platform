@@ -15,7 +15,7 @@ _is_prod = os.getenv("APP_ENV", "").lower() in ("production", "prod")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "" if _is_prod else "devsecops_user")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "" if _is_prod else "devsecops_pass")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "" if _is_prod else "local_db_pass_example")
 DB_NAME = os.getenv("DB_NAME", "devsecops_db")
 DB_TIMEOUT = int(os.getenv("DB_TIMEOUT", "1"))
 
