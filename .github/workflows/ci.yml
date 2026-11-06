@@ -79,18 +79,30 @@ jobs:
           echo "Java environment:"
           java -version
 
-          echo "Waiting for SonarQube to start..."
-          until curl -s http://localhost:9000/api/system/status | grep -q '"status":"UP"'; do
+          echo "Waiting for SonarQube to start (max 300s)..."
+          MAX_WAIT=300
+          START_TIME=$(date +%s)
+          READY=false
+          while [ $(( $(date +%s) - START_TIME )) -lt $MAX_WAIT ]; do
+            if curl -s --connect-timeout 5 --max-time 10 http://localhost:9000/api/system/status | grep -q '"status":"UP"'; then
+              READY=true
+              break
+            fi
             sleep 5
           done
+
+          if [ "$READY" != true ]; then
+            echo "ERROR: SonarQube service failed to become ready within ${MAX_WAIT}s" >&2
+            exit 1
+          fi
           echo "SonarQube is up!"
 
           ADMIN_PASSWORD="EphemeralAdminPass_${RANDOM}_$(openssl rand -hex 8)"
           echo "::add-mask::$ADMIN_PASSWORD"
 
-          curl -s -u admin:admin -X POST "http://localhost:9000/api/users/change_password?login=admin&previousPassword=admin&password=${ADMIN_PASSWORD}"
+          curl -s --connect-timeout 5 --max-time 15 -u admin:admin -X POST "http://localhost:9000/api/users/change_password?login=admin&previousPassword=admin&password=${ADMIN_PASSWORD}"
 
-          TOKEN=$(curl -s -u "admin:${ADMIN_PASSWORD}" -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-token-${RANDOM}" | jq -r .token)
+          TOKEN=$(curl -s --connect-timeout 5 --max-time 15 -u "admin:${ADMIN_PASSWORD}" -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-token-${RANDOM}" | jq -r .token)
           echo "::add-mask::$TOKEN"
 
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
@@ -100,7 +112,7 @@ jobs:
 
           export SONAR_SCANNER_VERSION=7.0.2.4839
           export SONAR_SCANNER_HOME=$HOME/.sonar/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64
-          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SONAR_SCANNER_VERSION-linux-x64.zip
+          curl -sSLo sonar-scanner.zip --connect-timeout 10 --max-time 60 https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SONAR_SCANNER_VERSION-linux-x64.zip
           unzip -q sonar-scanner.zip -d $HOME/.sonar/
           export PATH=$SONAR_SCANNER_HOME/bin:$PATH
 
@@ -109,7 +121,9 @@ jobs:
             -Dsonar.sources=app \
             -Dsonar.tests=tests \
             -Dsonar.host.url=http://localhost:9000 \
-            -Dsonar.token="$TOKEN"
+            -Dsonar.token="$TOKEN" \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
 
       - name: Run Trivy filesystem scan
         id: trivy_fs

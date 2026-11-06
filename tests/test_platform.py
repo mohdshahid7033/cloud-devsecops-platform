@@ -1076,3 +1076,151 @@ def test_missing_or_unestablished_step_returns_unknown_or_not_run():
         assert s["status"] in ("NOT_RUN", "UNKNOWN")
         assert s["status"] != "PASSED"
         assert s["duration"] == "0s"
+
+
+# ==============================================================================
+# SONARQUBE QUALITY GATE ENFORCEMENT & CLASSIFICATION TESTS
+# ==============================================================================
+
+def test_sonarqube_actual_quality_gate_passed(monkeypatch):
+    """Verify that an actual Quality Gate result from SonarQube API with OK status reports PASSED."""
+    from app import platform_service
+    import io
+
+    monkeypatch.setenv("SONAR_TOKEN", "fake_token_12345")
+    with patch("app.platform_service.probe_endpoint", return_value=(True, "127.0.0.1", 0.01)):
+        def mock_urlopen_handler(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "/api/system/status" in url:
+                return io.BytesIO(json.dumps({"status": "UP", "version": "10.6"}).encode())
+            elif "/api/qualitygates/project_status" in url:
+                return io.BytesIO(json.dumps({"projectStatus": {"status": "OK"}}).encode())
+            elif "/api/measures/component" in url:
+                return io.BytesIO(json.dumps({"component": {"measures": [{"metric": "bugs", "value": "0"}]}}).encode())
+            return io.BytesIO(b"{}")
+
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen_handler):
+            res = platform_service.get_sonarqube_status()
+            assert res["quality_gate"] == "PASSED"
+            assert res["authenticated"] is True
+            assert res["status"] == "ONLINE"
+            assert res["message"] == "SonarQube Quality Gate passed."
+
+
+def test_sonarqube_actual_quality_gate_failed(monkeypatch):
+    """Verify that an actual Quality Gate result with ERROR status reports FAILED."""
+    from app import platform_service
+    import io
+
+    monkeypatch.setenv("SONAR_TOKEN", "fake_token_12345")
+    with patch("app.platform_service.probe_endpoint", return_value=(True, "127.0.0.1", 0.01)):
+        def mock_urlopen_handler(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "/api/system/status" in url:
+                return io.BytesIO(json.dumps({"status": "UP", "version": "10.6"}).encode())
+            elif "/api/qualitygates/project_status" in url:
+                return io.BytesIO(json.dumps({"projectStatus": {"status": "ERROR"}}).encode())
+            return io.BytesIO(b"{}")
+
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen_handler):
+            res = platform_service.get_sonarqube_status()
+            assert res["quality_gate"] == "FAILED"
+            assert res["scanner_status"] == "SUCCESS"
+            assert res["authenticated"] is True
+            assert res["message"] == "SonarQube Quality Gate failed."
+
+
+def test_sonarqube_ci_step_failure_distinguished_from_qg_failure(monkeypatch):
+    """Verify that a generic CI scanner execution failure reports UNKNOWN quality gate with scanner_status=FAILED."""
+    from app import platform_service
+
+    monkeypatch.delenv("SONAR_TOKEN", raising=False)
+    fake_ci_data = {
+        "stages": [
+            {"id": "sonarqube", "name": "SonarQube analysis", "status": "FAILED", "duration": "35s"}
+        ]
+    }
+    with patch("app.platform_service.probe_endpoint", return_value=(False, "127.0.0.1", 0.0)):
+        with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_ci_data):
+            res = platform_service.get_sonarqube_status()
+            assert res["quality_gate"] == "UNKNOWN"
+            assert res["scanner_status"] == "FAILED"
+            assert res["authenticated"] is False
+            assert "unverified" in res["message"].lower() or "unverified" in res["note"].lower()
+
+
+def test_sonarqube_pending_running_result(monkeypatch):
+    """Verify that in-progress analysis in either live server or CI reports PENDING."""
+    from app import platform_service
+    import io
+
+    # Case A: Live server returns PENDING status
+    monkeypatch.setenv("SONAR_TOKEN", "fake_token_12345")
+    with patch("app.platform_service.probe_endpoint", return_value=(True, "127.0.0.1", 0.01)):
+        def mock_urlopen_handler(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "/api/system/status" in url:
+                return io.BytesIO(json.dumps({"status": "UP"}).encode())
+            elif "/api/qualitygates/project_status" in url:
+                return io.BytesIO(json.dumps({"projectStatus": {"status": "PENDING"}}).encode())
+            return io.BytesIO(b"{}")
+
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen_handler):
+            res = platform_service.get_sonarqube_status()
+            assert res["quality_gate"] == "PENDING"
+            assert res["authenticated"] is True
+
+    # Case B: CI step is RUNNING
+    monkeypatch.delenv("SONAR_TOKEN", raising=False)
+    fake_ci_data = {
+        "stages": [
+            {"id": "sonarqube", "name": "SonarQube analysis", "status": "RUNNING", "duration": "12s"}
+        ]
+    }
+    with patch("app.platform_service.probe_endpoint", return_value=(False, "127.0.0.1", 0.0)):
+        with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_ci_data):
+            res = platform_service.get_sonarqube_status()
+            assert res["quality_gate"] == "PENDING"
+            assert res["authenticated"] is False
+
+
+def test_sonarqube_scanner_success_without_verified_qg(monkeypatch):
+    """Verify that a successful scanner step in CI alone is NOT represented as Quality Gate PASSED."""
+    from app import platform_service
+
+    monkeypatch.delenv("SONAR_TOKEN", raising=False)
+    fake_ci_data = {
+        "stages": [
+            {"id": "sonarqube", "name": "SonarQube analysis", "status": "PASSED", "duration": "49s"}
+        ]
+    }
+    with patch("app.platform_service.probe_endpoint", return_value=(False, "127.0.0.1", 0.0)):
+        with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_ci_data):
+            res = platform_service.get_sonarqube_status()
+            # MUST NOT be PASSED because QG was not verified via authenticated API
+            assert res["quality_gate"] == "UNKNOWN"
+            assert res["quality_gate"] != "PASSED"
+            assert res["scanner_status"] == "PASSED"
+            assert res["authenticated"] is False
+            assert "unverified" in res["message"].lower()
+
+
+def test_sonarqube_unknown_or_unavailable_result(monkeypatch):
+    """Verify that when SonarQube is unreachable and no CI data is available, it reports UNAVAILABLE."""
+    from app import platform_service
+
+    monkeypatch.delenv("SONAR_TOKEN", raising=False)
+    with patch("app.platform_service.probe_endpoint", return_value=(False, "127.0.0.1", 0.0)):
+        with patch("app.platform_service.get_real_github_pipeline_data", return_value=None):
+            res = platform_service.get_sonarqube_status()
+            assert res["quality_gate"] == "UNAVAILABLE"
+            assert res["status"] == "UNAVAILABLE"
+            assert res["connected"] is False
+
+    # When reachable but unauthenticated and no CI data
+    with patch("app.platform_service.probe_endpoint", return_value=(True, "127.0.0.1", 0.01)):
+        with patch("urllib.request.urlopen"):
+            with patch("app.platform_service.get_real_github_pipeline_data", return_value=None):
+                res = platform_service.get_sonarqube_status()
+                assert res["quality_gate"] == "AUTHENTICATION_REQUIRED"
+                assert res["status"] == "ONLINE"

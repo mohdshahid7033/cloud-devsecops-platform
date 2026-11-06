@@ -348,6 +348,7 @@ def get_sonarqube_status():
         "version": None,
         "dashboard_url": f"{base_url}/dashboard?id=cloud-devsecops-platform",
         "quality_gate": None,
+        "scanner_status": None,
         "authenticated": False,
         "auth_required": True,
         "measures": {},
@@ -375,89 +376,119 @@ def get_sonarqube_status():
         except Exception:
             pass
 
-    if not is_reachable:
-        result["quality_gate"] = "UNAVAILABLE"
-        result["reason"] = f"SonarQube server on port {sonar_port} unreachable."
-        result["message"] = "SonarQube unavailable"
-        return result
-
-    # 1. System status endpoint (public / unauthenticated)
-    try:
-        req = urllib.request.Request(f"{base_url}/api/system/status")
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            data = json.loads(resp.read().decode())
-            result["system_status"] = data.get("status", "UP")
-            if "version" in data:
-                result["version"] = data["version"]
-    except Exception as e:
-        logger.debug(f"Failed to query SonarQube system status: {e}")
-
-    # 2. Check for configured token
-    token = os.getenv("SONAR_TOKEN", "").strip().strip('"').strip("'")
-    if token:
-        # Query Quality Gate Status
+    if is_reachable:
+        # 1. System status endpoint (public / unauthenticated)
         try:
-            auth_header = "Basic " + urllib.request.base64.b64encode(f"{token}:".encode()).decode()
-            qg_url = f"{base_url}/api/qualitygates/project_status?projectKey={result['project_key']}"
-            req_qg = urllib.request.Request(qg_url, headers={"Authorization": auth_header})
-            with urllib.request.urlopen(req_qg, timeout=2.0) as resp:
-                qg_data = json.loads(resp.read().decode())
-                qg_status = qg_data.get("projectStatus", {}).get("status", "UNKNOWN")
-                result["quality_gate"] = "PASSED" if qg_status == "OK" else ("FAILED" if qg_status == "ERROR" else qg_status)
-                result["authenticated"] = True
+            req = urllib.request.Request(f"{base_url}/api/system/status")
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode())
+                result["system_status"] = data.get("status", "UP")
+                if "version" in data:
+                    result["version"] = data["version"]
         except Exception as e:
-            logger.debug(f"SonarQube QG query failed with token: {e}")
+            logger.debug(f"Failed to query SonarQube system status: {e}")
 
-        # Query Measures
-        try:
-            m_keys = "alert_status,bugs,vulnerabilities,code_smells,sqale_rating,reliability_rating,security_rating"
-            m_url = f"{base_url}/api/measures/component?component={result['project_key']}&metricKeys={m_keys}"
-            req_m = urllib.request.Request(m_url, headers={"Authorization": auth_header})
-            with urllib.request.urlopen(req_m, timeout=2.0) as resp:
-                m_data = json.loads(resp.read().decode())
-                measures = {}
-                for m in m_data.get("component", {}).get("measures", []):
-                    measures[m.get("metric")] = m.get("value")
-                result["measures"] = measures
-                result["authenticated"] = True
-        except Exception as e:
-            logger.debug(f"SonarQube measures query failed with token: {e}")
+        # 2. Check for configured token
+        token = os.getenv("SONAR_TOKEN", "").strip().strip('"').strip("'")
+        if token:
+            # Query Quality Gate Status directly from live SonarQube server
+            try:
+                auth_header = "Basic " + urllib.request.base64.b64encode(f"{token}:".encode()).decode()
+                qg_url = f"{base_url}/api/qualitygates/project_status?projectKey={result['project_key']}"
+                req_qg = urllib.request.Request(qg_url, headers={"Authorization": auth_header})
+                with urllib.request.urlopen(req_qg, timeout=2.0) as resp:
+                    qg_data = json.loads(resp.read().decode())
+                    qg_status = qg_data.get("projectStatus", {}).get("status", "UNKNOWN")
+                    if qg_status == "OK":
+                        result["quality_gate"] = "PASSED"
+                        result["scanner_status"] = "SUCCESS"
+                        result["message"] = "SonarQube Quality Gate passed."
+                    elif qg_status == "ERROR":
+                        result["quality_gate"] = "FAILED"
+                        result["scanner_status"] = "SUCCESS"
+                        result["message"] = "SonarQube Quality Gate failed."
+                    elif qg_status in ("PENDING", "IN_PROGRESS"):
+                        result["quality_gate"] = "PENDING"
+                        result["scanner_status"] = "RUNNING"
+                        result["message"] = "SonarQube Quality Gate evaluation pending."
+                    elif qg_status == "WARN":
+                        result["quality_gate"] = "WARNING"
+                        result["scanner_status"] = "SUCCESS"
+                        result["message"] = "SonarQube Quality Gate passed with warnings."
+                    else:
+                        result["quality_gate"] = "UNKNOWN"
+                        result["scanner_status"] = "UNKNOWN"
+                        result["message"] = f"SonarQube Quality Gate status: {qg_status}"
+                    result["authenticated"] = True
+            except Exception as e:
+                logger.debug(f"SonarQube QG query failed with token: {e}")
 
+            # Query Measures
+            try:
+                m_keys = "alert_status,bugs,vulnerabilities,code_smells,sqale_rating,reliability_rating,security_rating"
+                m_url = f"{base_url}/api/measures/component?component={result['project_key']}&metricKeys={m_keys}"
+                req_m = urllib.request.Request(m_url, headers={"Authorization": auth_header})
+                with urllib.request.urlopen(req_m, timeout=2.0) as resp:
+                    m_data = json.loads(resp.read().decode())
+                    measures = {}
+                    for m in m_data.get("component", {}).get("measures", []):
+                        measures[m.get("metric")] = m.get("value")
+                    result["measures"] = measures
+                    result["authenticated"] = True
+            except Exception as e:
+                logger.debug(f"SonarQube measures query failed with token: {e}")
+
+    # Fallback to GitHub Actions CI state if live server is unauthenticated or unreachable
     if not result["authenticated"]:
-        # Fallback to GitHub Actions CI state if no local token is available
         gh_data = get_real_github_pipeline_data()
+        sonar_stage = None
         if gh_data and gh_data.get("stages"):
-            sonar_step_status = "UNKNOWN"
             for step in gh_data["stages"]:
-                if "sonarqube" in step["name"].lower():
-                    sonar_step_status = step["status"]
+                if "sonarqube" in step.get("name", "").lower() or step.get("id") == "sonarqube":
+                    sonar_stage = step
                     break
 
-            if sonar_step_status == "PASSED":
-                result["quality_gate"] = "PASSED"
+        if sonar_stage:
+            sonar_step_status = (sonar_stage.get("status") or "").upper()
+            if sonar_step_status == "FAILED":
+                # Scanner execution or workflow step failed, but actual Quality Gate status is unverified without token
+                result["quality_gate"] = "UNKNOWN"
+                result["scanner_status"] = "FAILED"
                 result["authenticated"] = False
-                result["note"] = "Quality gate status derived from real GitHub Actions pipeline."
-                result["message"] = "SonarQube analysis passed in CI."
-            elif sonar_step_status == "FAILED":
-                result["quality_gate"] = "FAILED"
-                result["authenticated"] = False
-                result["note"] = "Quality gate status derived from real GitHub Actions pipeline."
-                result["message"] = "SonarQube analysis failed in CI."
-            elif sonar_step_status in ("PENDING", "RUNNING"):
+                result["note"] = "SonarQube CI scanner step failed (execution error or Quality Gate breach). Actual Quality Gate verdict is unverified without SONAR_TOKEN."
+                result["message"] = "SonarQube CI scanner execution failed; actual Quality Gate result could not be verified."
+            elif sonar_step_status in ("PENDING", "RUNNING", "IN_PROGRESS"):
                 result["quality_gate"] = "PENDING"
+                result["scanner_status"] = "RUNNING"
                 result["authenticated"] = False
                 result["note"] = f"SonarQube analysis is currently {sonar_step_status.lower()} in CI."
                 result["message"] = f"SonarQube analysis is {sonar_step_status.lower()}."
+            elif sonar_step_status in ("PASSED", "SUCCESS"):
+                # Scanner upload success alone MUST NOT be represented as Quality Gate PASS.
+                # Without live token verification, the actual Quality Gate result cannot be verified.
+                result["quality_gate"] = "UNKNOWN"
+                result["scanner_status"] = "PASSED"
+                result["authenticated"] = False
+                result["note"] = "SonarScanner step passed in CI, but actual Quality Gate result is unverified without SONAR_TOKEN."
+                result["message"] = "SonarScanner completed in CI; Quality Gate unverified without authentication."
+            else:
+                result["quality_gate"] = "UNKNOWN" if is_reachable else "UNAVAILABLE"
+                result["scanner_status"] = sonar_step_status or "UNKNOWN"
+                result["authenticated"] = False
+                result["note"] = f"SonarQube stage status in CI: {sonar_step_status or 'NOT_RUN'}."
+                result["message"] = f"SonarQube stage {sonar_step_status or 'NOT_RUN'} in CI."
+        else:
+            if not is_reachable:
+                result["quality_gate"] = "UNAVAILABLE"
+                result["scanner_status"] = "UNAVAILABLE"
+                result["reason"] = f"SonarQube server on port {sonar_port} unreachable."
+                result["message"] = "SonarQube unavailable"
             else:
                 result["quality_gate"] = "AUTHENTICATION_REQUIRED"
+                result["scanner_status"] = "CONNECTED"
                 result["authenticated"] = False
                 result["note"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
                 result["message"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
-        else:
-            result["quality_gate"] = "AUTHENTICATION_REQUIRED"
-            result["authenticated"] = False
-            result["note"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
-            result["message"] = "SonarQube connected. Detailed metrics require authentication token (SONAR_TOKEN)."
 
     return result
 
