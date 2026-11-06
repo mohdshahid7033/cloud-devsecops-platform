@@ -661,12 +661,13 @@ async function loadPipelines() {
       }
     }
 
-    // Stage descriptions for the 13 stages
+    // Stage descriptions for the 14 stages
     const stageDescriptions = {
       'checkout': 'Retrieve the latest source code from GitHub.',
       'python-check': 'Verify the required Python runtime.',
       'deps': 'Install application dependencies.',
       'pytest': 'Execute automated application tests.',
+      'pip-audit': 'Scan Python dependencies for known vulnerabilities.',
       'sonarqube': 'Analyze source code quality.',
       'trivy-fs': 'Scan project files for known vulnerabilities.',
       'docker-build': 'Package the application into a Docker image.',
@@ -778,7 +779,7 @@ async function loadPipelines() {
         { label: 'SOURCE', ids: ['checkout'] },
         { label: 'TEST', ids: ['python-check', 'deps', 'pytest'] },
         { label: 'QUALITY', ids: ['sonarqube'] },
-        { label: 'SECURITY', ids: ['trivy-fs', 'trivy-image'] },
+        { label: 'SECURITY', ids: ['pip-audit', 'trivy-fs', 'trivy-image'] },
         { label: 'BUILD', ids: ['docker-build'] },
         { label: 'REGISTRY', ids: ['ecr-login', 'ecr-push'] },
         { label: 'DEPLOY', ids: ['aws-config', 'ssm-deploy'] },

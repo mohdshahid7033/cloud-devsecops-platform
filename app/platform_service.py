@@ -1211,7 +1211,7 @@ def map_github_workflow_status(gh_status, gh_conclusion=None):
 def get_real_github_pipeline_data(run_id=None):
     """
     Fetch pipeline data from real GitHub Actions runs and jobs API with caching.
-    Accurately maps jobs and steps to the 13 canonical stages without fabricating success.
+    Accurately maps jobs and steps to the 14 canonical stages without fabricating success.
     Distinguishes the latest normal CI run from the latest production deployment.
     """
     global _github_cache
@@ -1362,7 +1362,7 @@ def get_real_github_pipeline_data(run_id=None):
 
 def _map_jobs_to_canonical_stages(jobs):
     """
-    Map GitHub Actions jobs and steps to the 13 canonical pipeline stages.
+    Map GitHub Actions jobs and steps to the 14 canonical pipeline stages.
     Accurately maps stages using actual job IDs, job conclusions, and step execution data.
     Ensures skipped deployment jobs always reflect SKIPPED with 0s duration.
     If a stage cannot be established from GitHub data, displays NOT_RUN or UNKNOWN rather than PASSED.
@@ -1372,6 +1372,7 @@ def _map_jobs_to_canonical_stages(jobs):
         {"id": "python-check", "name": "Check Python", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"check python", r"setup python"]},
         {"id": "deps", "name": "Install dependencies", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"install dependencies"]},
         {"id": "pytest", "name": "Run tests (pytest)", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"run.*test", r"pytest"]},
+        {"id": "pip-audit", "name": "Python dependency vulnerability scan (pip-audit)", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"pip-audit", r"pip_audit", r"python dependency vulnerability scan"]},
         {"id": "sonarqube", "name": "SonarQube analysis", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"sonarqube"]},
         {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"trivy filesystem"]},
         {"id": "docker-build", "name": "Build Docker image", "job_keys": ["test-and-scan", "test", "scan"], "step_patterns": [r"build docker image"]},
@@ -1513,6 +1514,7 @@ def get_pipeline_stages(run_id=None):
         {"id": "python-check", "name": "Check Python", "status": "NOT_RUN", "duration": "0s", "command": "python --version; pip --version"},
         {"id": "deps", "name": "Install dependencies", "status": "NOT_RUN", "duration": "0s", "command": "pip install -r app/requirements.txt pytest awscli"},
         {"id": "pytest", "name": "Run tests (pytest)", "status": "NOT_RUN", "duration": "0s", "command": "pytest"},
+        {"id": "pip-audit", "name": "Python dependency vulnerability scan (pip-audit)", "status": "NOT_RUN", "duration": "0s", "command": "pip-audit -r app/requirements.txt"},
         {"id": "sonarqube", "name": "SonarQube analysis", "status": "NOT_RUN", "duration": "0s", "command": "sonar-scanner -Dsonar.projectKey=cloud-devsecops-platform"},
         {"id": "trivy-fs", "name": "Run Trivy filesystem scan", "status": "NOT_RUN", "duration": "0s", "command": "trivy fs --severity HIGH,CRITICAL --ignorefile .trivyignore ."},
         {"id": "docker-build", "name": "Build Docker image", "status": "NOT_RUN", "duration": "0s", "command": "docker build -t devsecops-platform -f docker/Dockerfile ."},
