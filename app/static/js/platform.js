@@ -972,14 +972,24 @@ async function loadSecurity() {
 
     // Ignored CVEs table
     const cveBody = document.getElementById('security-ignored-cves-tbody');
-    if (cveBody && data.trivy?.ignored_cves) {
-      cveBody.innerHTML = data.trivy.ignored_cves.map(c => `
-        <tr>
-          <td><span class="code-pill text-info">${escapeHtml(c.cve_id)}</span></td>
-          <td style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(c.rationale)}</td>
-          <td><span class="status-badge info">${escapeHtml(c.policy || 'Ignored by project policy')}</span></td>
-        </tr>
-      `).join('');
+    if (cveBody) {
+      if (data.trivy?.ignored_cves && data.trivy.ignored_cves.length > 0) {
+        cveBody.innerHTML = data.trivy.ignored_cves.map(c => `
+          <tr>
+            <td><span class="code-pill text-info">${escapeHtml(c.cve_id)}</span></td>
+            <td style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(c.rationale)}</td>
+            <td><span class="status-badge info">${escapeHtml(c.policy || 'Ignored by project policy')}</span></td>
+          </tr>
+        `).join('');
+      } else {
+        cveBody.innerHTML = `
+          <tr>
+            <td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 14px; font-style: italic;">
+              Zero active CVE exceptions. Strict zero-suppression policy enforced.
+            </td>
+          </tr>
+        `;
+      }
     }
 
     // SonarQube SAST card

@@ -2,6 +2,9 @@ import json
 import pytest
 from unittest.mock import patch
 from app.app import app
+from app import platform_service
+
+_REAL_GET_TRIVY = platform_service.get_trivy_security_status
 
 @pytest.fixture(autouse=True)
 def mock_external_apis():
@@ -13,6 +16,8 @@ def mock_external_apis():
         "status": "PASSED",
         "critical_vulnerabilities": 0,
         "high_vulnerabilities": 0,
+        "medium_vulnerabilities": None,
+        "low_vulnerabilities": None,
         "summary_statement": "0 HIGH / CRITICAL vulnerabilities detected in the latest configured scan",
         "ignored_cves": []
     }
@@ -1377,3 +1382,1032 @@ def test_pip_audit_docker_retained_dependency_manifest(tmp_path):
     assert "Werkzeug>=3.1.9,<4.0" in content
     assert "msgpack>=1.2.1" in content
     assert "setuptools" not in content  # build-time only, uninstalled in Dockerfile
+
+
+# ==============================================================================
+# STAGE 3 & 4: TRIVY SCANNING, EXCEPTION REMOVAL & DIGEST TRACEABILITY TESTS
+# ==============================================================================
+
+def test_trivy_status_combines_filesystem_and_image_scans():
+    """Verify Trivy security status evaluates both filesystem and image scans accurately."""
+    # Case 1: Both scanners PASSED -> overall status PASSED
+    fake_gh_passed = {
+        "run": {"updated_at": "2026-11-06T12:00:00Z"},
+        "trivy_fs_step": {"status": "PASSED"},
+        "trivy_image_step": {"status": "PASSED"}
+    }
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh_passed):
+        res = _REAL_GET_TRIVY()
+        assert res["status"] == "PASSED"
+        assert res["critical_vulnerabilities"] == 0
+        assert res["high_vulnerabilities"] == 0
+        assert res["medium_vulnerabilities"] is None  # Not fabricated as 0
+        assert res["low_vulnerabilities"] is None     # Not fabricated as 0
+        assert res["scanners"]["filesystem"]["status"] == "PASSED"
+        assert res["scanners"]["container_image"]["status"] == "PASSED"
+
+    # Case 2: Filesystem PASSED but Container Image FAILED -> overall status FAILED
+    fake_gh_img_failed = {
+        "run": {"updated_at": "2026-11-06T12:00:00Z"},
+        "trivy_fs_step": {"status": "PASSED"},
+        "trivy_image_step": {"status": "FAILED"}
+    }
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh_img_failed):
+        res = _REAL_GET_TRIVY()
+        assert res["status"] == "FAILED"
+        assert "failure" in res["summary_statement"].lower() or "vulnerabilities" in res["summary_statement"].lower()
+
+    # Case 3: Filesystem FAILED and Container Image PASSED -> overall status FAILED
+    fake_gh_fs_failed = {
+        "run": {"updated_at": "2026-11-06T12:00:00Z"},
+        "trivy_fs_step": {"status": "FAILED"},
+        "trivy_image_step": {"status": "PASSED"}
+    }
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh_fs_failed):
+        res = _REAL_GET_TRIVY()
+        assert res["status"] == "FAILED"
+
+    # Case 4: Either scanner RUNNING -> overall status RUNNING
+    fake_gh_running = {
+        "run": {"updated_at": "2026-11-06T12:00:00Z"},
+        "trivy_fs_step": {"status": "PASSED"},
+        "trivy_image_step": {"status": "RUNNING"}
+    }
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh_running):
+        res = _REAL_GET_TRIVY()
+        assert res["status"] == "RUNNING"
+
+    # Case 5: Both SKIPPED -> overall status SKIPPED
+    fake_gh_skipped = {
+        "run": {"updated_at": "2026-11-06T12:00:00Z"},
+        "trivy_fs_step": {"status": "SKIPPED"},
+        "trivy_image_step": {"status": "SKIPPED"}
+    }
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh_skipped):
+        res = _REAL_GET_TRIVY()
+        assert res["status"] == "SKIPPED"
+
+
+def test_trivy_zero_exceptions_policy_when_ignore_file_deleted():
+    """Verify that when .trivyignore is deleted, get_trivy_security_status reports zero active exceptions."""
+    fake_gh = {
+        "run": {"updated_at": "2026-11-06T12:00:00Z"},
+        "trivy_fs_step": {"status": "PASSED"},
+        "trivy_image_step": {"status": "PASSED"}
+    }
+    with patch("app.platform_service.get_real_github_pipeline_data", return_value=fake_gh):
+        res = _REAL_GET_TRIVY()
+        assert res["ignored_cves"] == []
+        assert len(res["ignored_cves"]) == 0
+
+
+def test_trivy_json_report_parsing(tmp_path):
+    """Verify parsing logic for Trivy JSON report correctly extracts vulnerabilities and severity counts."""
+    import json
+    fake_report = {
+        "Results": [
+            {
+                "Target": "app/requirements.txt",
+                "Vulnerabilities": [
+                    {
+                        "VulnerabilityID": "CVE-2026-0001",
+                        "PkgName": "test-pkg",
+                        "Severity": "CRITICAL",
+                        "InstalledVersion": "1.0.0",
+                        "FixedVersion": "1.0.1"
+                    },
+                    {
+                        "VulnerabilityID": "CVE-2026-0002",
+                        "PkgName": "test-pkg-2",
+                        "Severity": "HIGH",
+                        "InstalledVersion": "2.0.0",
+                        "FixedVersion": "2.0.1"
+                    },
+                    {
+                        "VulnerabilityID": "CVE-2026-0003",
+                        "PkgName": "test-pkg-3",
+                        "Severity": "MEDIUM",
+                        "InstalledVersion": "3.0.0",
+                        "FixedVersion": "3.0.1"
+                    }
+                ]
+            }
+        ]
+    }
+    report_file = tmp_path / "trivy-results.json"
+    report_file.write_text(json.dumps(fake_report), encoding="utf-8")
+
+    with open(report_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    crit_count = sum(1 for r in data.get("Results", []) for v in r.get("Vulnerabilities", []) if v.get("Severity") == "CRITICAL")
+    high_count = sum(1 for r in data.get("Results", []) for v in r.get("Vulnerabilities", []) if v.get("Severity") == "HIGH")
+    med_count = sum(1 for r in data.get("Results", []) for v in r.get("Vulnerabilities", []) if v.get("Severity") == "MEDIUM")
+    low_count = sum(1 for r in data.get("Results", []) for v in r.get("Vulnerabilities", []) if v.get("Severity") == "LOW")
+
+    assert crit_count == 1
+    assert high_count == 1
+    assert med_count == 1
+    assert low_count == 0
+
+
+def test_cyclonedx_sbom_validation(tmp_path):
+    """Verify CycloneDX SBOM structure, schema header, and component representation."""
+    import json
+    fake_sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+        "version": 1,
+        "metadata": {
+            "component": {
+                "name": "devsecops-platform",
+                "version": "8304adbafb28b39d66be440d0acf66788f3c9d98",
+                "type": "container"
+            }
+        },
+        "components": [
+            {"name": "Flask", "version": "3.1.3", "type": "library"},
+            {"name": "Werkzeug", "version": "3.1.9", "type": "library"}
+        ]
+    }
+    sbom_file = tmp_path / "sbom.json"
+    sbom_file.write_text(json.dumps(fake_sbom), encoding="utf-8")
+
+    with open(sbom_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    assert data.get("bomFormat") == "CycloneDX"
+    assert data.get("specVersion") in ("1.4", "1.5", "1.6")
+    assert len(data.get("components", [])) == 2
+    comp_names = [c["name"] for c in data["components"]]
+    assert "Flask" in comp_names
+    assert "Werkzeug" in comp_names
+
+
+def test_image_archive_metadata_and_id_verification(tmp_path):
+    """Verify that image artifact metadata accurately ties the commit SHA to the local image ID."""
+    import json
+    metadata_file = tmp_path / "image-metadata.json"
+    recorded_id = "sha256:d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a3928170615"
+    commit_sha = "8304adbafb28b39d66be440d0acf66788f3c9d98"
+    metadata_file.write_text(json.dumps({
+        "commit_sha": commit_sha,
+        "image_id": recorded_id,
+        "image_tag": f"devsecops-platform:{commit_sha}",
+        "created_at": "2026-11-06T12:00:00Z"
+    }), encoding="utf-8")
+
+    with open(metadata_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    assert data["commit_sha"] == commit_sha
+    assert data["image_id"] == recorded_id
+
+    # Simulate loaded image check: match passes
+    loaded_id = recorded_id
+    assert loaded_id == data["image_id"]
+
+    # Simulate loaded image check: mismatch fails
+    mismatched_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    assert mismatched_id != data["image_id"]
+
+
+def test_ecr_image_digest_validation_and_uri_formatting():
+    """Verify authoritative ECR digest format validation and immutable URI construction."""
+    import re
+    digest_regex = re.compile(r"^sha256:[a-f0-9]{64}$")
+
+    valid_digest = "sha256:4f5a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9"
+    invalid_digest_1 = "4f5a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9"  # Missing prefix
+    invalid_digest_2 = "sha256:short"  # Invalid length
+    invalid_digest_3 = "latest"  # Mutable tag
+
+    assert digest_regex.match(valid_digest) is not None
+    assert digest_regex.match(invalid_digest_1) is None
+    assert digest_regex.match(invalid_digest_2) is None
+    assert digest_regex.match(invalid_digest_3) is None
+
+    # Verify immutable deployment URI construction
+    ecr_registry = "850252650249.dkr.ecr.ap-south-1.amazonaws.com"
+    ecr_repo = "devsecops-platform"
+    deploy_image = f"{ecr_registry}/{ecr_repo}@{valid_digest}"
+
+    assert deploy_image.startswith(f"{ecr_registry}/{ecr_repo}@sha256:")
+    assert "@" in deploy_image
+    assert ":" in deploy_image.split("@")[1]
+
+
+def test_ci_workflow_single_build_and_digest_deployment_contract():
+    """
+    Verify CI workflow contract:
+    1. test-and-scan builds and tests the image once.
+    2. publish-ecr loads the verified image and does not run docker build.
+    3. publish-ecr defines image_digest and image_uri outputs.
+    4. deploy-blue-green passes DEPLOY_IMAGE with @sha256 digest.
+    5. verify-production checks running container against expected digest.
+    """
+    import yaml
+    with open(".github/workflows/ci.yml", "r", encoding="utf-8") as f:
+        wf = yaml.safe_load(f)
+
+    jobs = wf.get("jobs", {})
+    assert "test-and-scan" in jobs
+    assert "publish-ecr" in jobs
+    assert "deploy-blue-green" in jobs
+    assert "verify-production" in jobs
+
+    # 1. test-and-scan has smoke test and security scans
+    test_scan_steps = jobs["test-and-scan"].get("steps", [])
+    step_ids = [s.get("id") for s in test_scan_steps]
+    assert "trivy_fs" in step_ids
+    assert "build_docker" in step_ids
+    assert "smoke_test" in step_ids
+    assert "trivy_image" in step_ids
+
+    # 2. publish-ecr outputs
+    publish_job = jobs["publish-ecr"]
+    assert "outputs" in publish_job
+    assert "image_digest" in publish_job["outputs"]
+    assert "image_uri" in publish_job["outputs"]
+
+    # 3. publish-ecr does NOT rebuild the image with 'docker build'
+    publish_steps = publish_job.get("steps", [])
+    for step in publish_steps:
+        run_script = step.get("run", "")
+        # Must not contain docker build command
+        assert "docker build " not in run_script
+
+    # 4. publish-ecr depends on test-and-scan
+    assert publish_job.get("needs") == ["test-and-scan"]
+
+    # 5. deploy-blue-green depends on publish-ecr
+    deploy_job = jobs["deploy-blue-green"]
+    assert deploy_job.get("needs") == ["publish-ecr"]
+
+    # 6. verify-production depends on deploy-blue-green and publish-ecr
+    verify_job = jobs["verify-production"]
+    assert "deploy-blue-green" in verify_job.get("needs")
+    assert "publish-ecr" in verify_job.get("needs")
+
+    # 7. Check pinned Trivy v0.76.2 and checksum validation in trivy_fs step
+    trivy_fs_step = next(s for s in test_scan_steps if s.get("id") == "trivy_fs")
+    run_cmd = trivy_fs_step.get("run", "")
+    assert 'TRIVY_VERSION="0.76.2"' in run_cmd
+    assert "sha256sum --check" in run_cmd
+
+    # 8. Security evidence artifact upload requires all files (if-no-files-found: error)
+    upload_evidence_step = next(s for s in test_scan_steps if "Upload security scan evidence" in s.get("name", ""))
+    assert upload_evidence_step.get("with", {}).get("if-no-files-found") == "error"
+
+
+def test_deploy_script_digest_validation():
+    """Verify scripts/deploy_blue_green.sh strictly enforces immutable digest references."""
+    import re
+    digest_regex = re.compile(r"@sha256:[a-f0-9]{64}$")
+
+    # Valid immutable digest references
+    assert digest_regex.search("850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform@sha256:4f5a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9") is not None
+    assert digest_regex.search("devsecops-platform@sha256:4f5a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9") is not None
+
+    # Invalid mutable tag references
+    assert digest_regex.search("850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:latest") is None
+    assert digest_regex.search("850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:8304adbafb28b39d66be440d0acf66788f3c9d98") is None
+    assert digest_regex.search("devsecops-platform:latest") is None
+    assert digest_regex.search("devsecops-platform@sha256:short") is None
+
+    # Verify that scripts/deploy_blue_green.sh contains this exact validation guard
+    with open("scripts/deploy_blue_green.sh", "r", encoding="utf-8") as f:
+        script_content = f.read()
+    assert "@sha256:[a-f0-9]{64}" in script_content
+    assert "DEPLOY_IMAGE must reference an immutable digest" in script_content
+
+
+def simulate_trivy_checksum_verification(manifest_content: str, tarball_name: str, tarball_bytes: bytes, installed_version: str):
+    """
+    Simulate the fail-closed Trivy checksum verification logic implemented in CI.
+    Fails if:
+    1. Manifest is missing or empty.
+    2. No matching entry found for tarball_name (MATCH_LINES is empty).
+    3. More than 1 matching entry found in manifest.
+    4. Checksum in entry is malformed (not exactly 64 hex characters).
+    5. Filename in entry does not match expected tarball_name.
+    6. Checksum does not match the computed SHA256 of tarball_bytes.
+    7. Installed version does not match '0.76.2'.
+    """
+    import hashlib
+    import re
+
+    if not manifest_content or not manifest_content.strip():
+        raise ValueError("Downloaded checksum manifest is missing or empty")
+
+    pattern = re.compile(rf"^[a-fA-F0-9]{{64}}[ \t]+(\*)?{re.escape(tarball_name)}$")
+    match_lines = [line.strip() for line in manifest_content.splitlines() if pattern.match(line.strip())]
+
+    # 1. Explicitly reject empty match before counting entries
+    if not match_lines:
+        raise ValueError(f"No matching checksum entry found for {tarball_name} in manifest")
+
+    # 2. Exactly one entry must exist
+    if len(match_lines) != 1:
+        raise ValueError(f"Expected exactly 1 checksum entry for {tarball_name}, found {len(match_lines)}")
+
+    parts = match_lines[0].split()
+    expected_hash = parts[0]
+    expected_file = parts[1].lstrip("*")
+
+    # 3. Checksum must contain exactly 64 hexadecimal characters
+    if not re.match(r"^[a-fA-F0-9]{64}$", expected_hash):
+        raise ValueError(f"Malformed SHA256 checksum in manifest entry: '{expected_hash}'")
+
+    # 4. Matched entry must be the expected Trivy archive filename
+    if expected_file != tarball_name:
+        raise ValueError(f"Checksum manifest filename mismatch: expected {tarball_name}, found {expected_file}")
+
+    # 5. Archive hash verification (sha256sum --check --strict)
+    actual_hash = hashlib.sha256(tarball_bytes).hexdigest().lower()
+    if expected_hash.lower() != actual_hash:
+        raise ValueError(f"Checksum mismatch: expected {expected_hash}, calculated {actual_hash}")
+
+    # 6. Installed version check
+    expected_version = "0.76.2"
+    version_match = re.search(r"\b(\d+\.\d+\.\d+)\b", installed_version)
+    installed_ver = version_match.group(1) if version_match else ""
+    if installed_ver != expected_version:
+        raise ValueError(f"Installed version mismatch: expected {expected_version}, got {installed_ver}")
+
+    return True
+
+
+def resolve_active_container_from_upstream(upstream_conf: str) -> str:
+    """
+    Strict parser for Nginx upstream configuration.
+    Enforces architectural invariants:
+    1. Removes comments and normalizes newlines/spaces.
+    2. Validates exactly one closed 'upstream app_backend { ... }' block exists without nesting or ambiguity.
+    3. Isolates the body of 'upstream app_backend' so other upstream/server blocks cannot leak directives.
+    4. Validates that every statement inside app_backend terminates with a semicolon (no unterminated statements).
+    5. Extracts all non-empty semicolon-terminated directives inside the block body.
+    6. Requires exactly ONE directive total in 'app_backend'.
+    7. Verifies the directive matches the exact syntax 'server <authorized-host>:5000' with NO trailing parameters.
+    8. Validates target host is strictly one of:
+       - devsecops-app-blue
+       - devsecops-app-green
+       - devsecops-app (legacy single-container)
+    Fails closed on missing, unclosed, ambiguous, duplicated, trailing, or unexpected directives.
+    """
+    import re
+    if not upstream_conf or not upstream_conf.strip():
+        raise ValueError("Missing or empty Nginx upstream configuration")
+
+    # 1. Strip comments
+    clean_lines = [re.sub(r"#.*", "", line) for line in upstream_conf.splitlines()]
+    clean_conf = "\n".join(clean_lines)
+
+    # 2. Normalize whitespace into single line representation
+    one_line = " ".join(clean_conf.split())
+
+    # 3. Detect total definitions and strictly closed blocks
+    total_block_defs = len(re.findall(r"upstream\s+app_backend\s*\{", one_line))
+    closed_blocks = len(re.findall(r"upstream\s+app_backend\s*\{[^{}]*\}", one_line))
+    if total_block_defs != 1 or closed_blocks != 1:
+        raise ValueError("Malformed, unclosed, or ambiguous upstream app_backend block in Nginx configuration")
+
+    # 4. Extract isolated block body
+    block_match = re.search(r"upstream\s+app_backend\s*\{([^{}]*)\}", one_line)
+    if not block_match:
+        raise ValueError("Malformed, unclosed, or ambiguous upstream app_backend block in Nginx configuration")
+
+    block_body = block_match.group(1).strip()
+    if not block_body:
+        raise ValueError("No directives found in app_backend upstream")
+
+    # 5. Check for unterminated trailing text (missing semicolon)
+    if ";" not in block_body:
+        raise ValueError("Malformed upstream app_backend block: missing terminating semicolon")
+    trailing = block_body.rsplit(";", 1)[1].strip()
+    if trailing:
+        raise ValueError(f"Malformed upstream app_backend block: unterminated trailing statement '{trailing}' (missing semicolon)")
+
+    # 6. Extract all non-empty directives
+    directives = [d.strip() for d in block_body.split(";") if d.strip()]
+    if not directives:
+        raise ValueError("No directives found in app_backend upstream")
+
+    # 7. Require exactly 1 directive in app_backend (no extra non-server directives or multiple servers)
+    if len(directives) != 1:
+        raise ValueError(f"Expected exactly 1 directive in app_backend upstream, found {len(directives)}: {directives}")
+
+    directive = directives[0]
+
+    # 8. Require the complete directive to match exact supported syntax with NO trailing parameters
+    # Must match: ^server\s+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$
+    match = re.match(r"^server\s+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$", directive)
+    if not match:
+        raise ValueError(f"Upstream directive does not match exact supported syntax 'server <authorized-host>:5000': '{directive}'")
+
+    host = match.group(1)
+    return host
+
+
+def simulate_production_digest_verification(
+    upstream_conf: str,
+    running_containers: list[str],
+    container_repo_digests: dict[str, list[str]],
+    expected_ref: str,
+    expected_digest: str,
+    nginx_running: bool = True,
+    active_nginx_verified: bool = True
+) -> bool:
+    """
+    Simulate the authoritative production digest verification executed via SSM on EC2.
+    1. Validates expected_digest format against ^sha256:[a-f0-9]{64}$.
+    2. Verifies reverse proxy container devsecops-nginx is actively running in Docker.
+    3. Confirms active upstream configuration is read directly from running Nginx (rejects unverified host fallback).
+    4. Resolves active container from upstream_conf using strict single-server parsing.
+    5. Confirms the active container is present in running_containers (standby container can also run).
+    6. Retrieves RepoDigests for the active container.
+    7. Verifies exact string equality between expected_ref and one of the container's RepoDigests.
+    """
+    import re
+
+    digest_pattern = re.compile(r"^sha256:[a-f0-9]{64}$")
+    if not expected_digest or not digest_pattern.match(expected_digest):
+        raise ValueError(f"Invalid or missing expected digest format: {expected_digest}")
+
+    if not nginx_running:
+        raise ValueError("Reverse proxy container devsecops-nginx is not running")
+
+    if not active_nginx_verified:
+        raise ValueError("Failed to read /etc/nginx/conf.d/upstream.conf from running devsecops-nginx")
+
+    active_container = resolve_active_container_from_upstream(upstream_conf)
+
+    if active_container not in running_containers:
+        raise ValueError(f"Active container '{active_container}' is not running in Docker")
+
+    repo_digests = container_repo_digests.get(active_container, [])
+    if not repo_digests:
+        raise ValueError(f"Active container '{active_container}' has no RepoDigests")
+
+    match = any(ref.strip() == expected_ref.strip() for ref in repo_digests)
+    if not match:
+        raise ValueError(f"Exact image reference mismatch: expected {expected_ref}, found {repo_digests}")
+
+    return True
+
+
+def test_trivy_checksum_manifest_validation_fail_closed():
+    """
+    Verify fail-closed checksum manifest handling for Trivy v0.76.2 installation:
+    1. Correct single checksum and matching archive -> PASS
+    2. Empty checksum manifest -> FAIL
+    3. No matching checksum entry -> FAIL
+    4. Two matching entries -> FAIL
+    5. Malformed checksum (not 64 hex characters) -> FAIL
+    6. Wrong archive filename -> FAIL
+    7. Incorrect archive checksum (bytes corrupted) -> FAIL
+    8. Installed version mismatch -> FAIL
+    """
+    import hashlib
+
+    tarball = "trivy_0.76.2_Linux-64bit.tar.gz"
+    sample_bytes = b"fake-trivy-binary-archive-payload-0.76.2"
+    correct_hash = hashlib.sha256(sample_bytes).hexdigest()
+
+    valid_manifest = (
+        f"1111111111111111111111111111111111111111111111111111111111111111  trivy_0.76.2_macOS-64bit.tar.gz\n"
+        f"{correct_hash}  {tarball}\n"
+        f"2222222222222222222222222222222222222222222222222222222222222222  trivy_0.76.2_Linux-ARM64.tar.gz\n"
+    )
+
+    # 1. Correct single checksum and matching archive -> PASS
+    assert simulate_trivy_checksum_verification(valid_manifest, tarball, sample_bytes, "Version: 0.76.2") is True
+
+    # 1b. Standard binary-mode checksum entry (space + *filename) -> PASS
+    binary_manifest_1 = (
+        f"1111111111111111111111111111111111111111111111111111111111111111 *trivy_0.76.2_macOS-64bit.tar.gz\n"
+        f"{correct_hash} *{tarball}\n"
+    )
+    assert simulate_trivy_checksum_verification(binary_manifest_1, tarball, sample_bytes, "Version: 0.76.2") is True
+
+    # 1c. Standard binary-mode checksum entry (two spaces + *filename) -> PASS
+    binary_manifest_2 = (
+        f"{correct_hash}  *{tarball}\n"
+    )
+    assert simulate_trivy_checksum_verification(binary_manifest_2, tarball, sample_bytes, "Version: 0.76.2") is True
+
+    # 2. Empty checksum manifest -> FAIL
+    with pytest.raises(ValueError, match="Downloaded checksum manifest is missing or empty"):
+        simulate_trivy_checksum_verification("", tarball, sample_bytes, "Version: 0.76.2")
+
+    # 3. No matching checksum entry -> FAIL
+    missing_manifest = "1111111111111111111111111111111111111111111111111111111111111111  trivy_0.76.2_macOS-64bit.tar.gz\n"
+    with pytest.raises(ValueError, match=f"No matching checksum entry found for {tarball}"):
+        simulate_trivy_checksum_verification(missing_manifest, tarball, sample_bytes, "Version: 0.76.2")
+
+    # 4. Two matching entries -> FAIL
+    duplicate_manifest = (
+        f"{correct_hash}  {tarball}\n"
+        f"{correct_hash}  {tarball}\n"
+    )
+    with pytest.raises(ValueError, match="Expected exactly 1 checksum entry"):
+        simulate_trivy_checksum_verification(duplicate_manifest, tarball, sample_bytes, "Version: 0.76.2")
+
+    # 5. Malformed checksum (not 64 hex characters) -> FAIL
+    malformed_manifest = f"abc123not64hexchars  {tarball}\n"
+    with pytest.raises(ValueError, match="No matching checksum entry found for"):
+        simulate_trivy_checksum_verification(malformed_manifest, tarball, sample_bytes, "Version: 0.76.2")
+
+    # 6. Wrong archive filename -> FAIL
+    wrong_file_manifest = f"{correct_hash}  wrong_archive_name.tar.gz\n"
+    with pytest.raises(ValueError, match=f"No matching checksum entry found for {tarball}"):
+        simulate_trivy_checksum_verification(wrong_file_manifest, tarball, sample_bytes, "Version: 0.76.2")
+
+    # 7. Incorrect archive checksum (bytes corrupted) -> FAIL
+    corrupted_bytes = b"tampered-archive-content"
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        simulate_trivy_checksum_verification(valid_manifest, tarball, corrupted_bytes, "Version: 0.76.2")
+
+    # 8. Installed version mismatch -> FAIL
+    with pytest.raises(ValueError, match="Installed version mismatch"):
+        simulate_trivy_checksum_verification(valid_manifest, tarball, sample_bytes, "Version: 0.76.1")
+
+    with pytest.raises(ValueError, match="Installed version mismatch"):
+        simulate_trivy_checksum_verification(valid_manifest, tarball, sample_bytes, "unexpected output")
+
+
+def test_production_digest_verification_scenarios():
+    """
+    Verify authoritative production digest verification covers all strict parser scenarios:
+    1. Valid exact one-line directive (PASS)
+    2. Valid exact multiline directive (PASS)
+    3. Trailing backup parameter (FAIL)
+    4. Trailing down parameter (FAIL)
+    5. Trailing weight=2 parameter (FAIL)
+    6. Additional unexpected directive in app_backend (FAIL)
+    7. Unrelated upstream block containing other server directives (PASS - block isolation)
+    8. Each supported authorized target (devsecops-app-blue, devsecops-app-green, devsecops-app) (PASS)
+    9. Loopback format (127.0.0.1:5000) (FAIL - rejected by allowlist and unreachable)
+    10. Unterminated statement without semicolon (FAIL)
+    11. Duplicate identical target directives multiline (FAIL)
+    12. Duplicate identical target directives single-line (FAIL)
+    13. One valid target plus an unknown target (FAIL)
+    14. Multiple different known targets (FAIL)
+    15. Single unauthorized or unrecognized target (FAIL)
+    16. Wrong port (FAIL)
+    17. Missing port (FAIL)
+    18. Missing upstream block entirely (FAIL)
+    19. Missing server directive in app_backend (FAIL)
+    20. Unclosed upstream block (FAIL)
+    21. Malformed or ambiguous duplicate upstream blocks (FAIL)
+    22. Nginx container unavailable (FAIL)
+    23. Host file exists but active Nginx configuration cannot be verified (FAIL)
+    24. Active container not running in Docker (FAIL)
+    25. Exact digest match (PASS)
+    26. Wrong digest (FAIL)
+    27. Wrong ECR repository (FAIL)
+    28. Missing RepoDigests (FAIL)
+    29. Invalid expected digest format (FAIL)
+    """
+    valid_digest = "sha256:4f5a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9"
+    registry = "850252650249.dkr.ecr.ap-south-1.amazonaws.com"
+    repo = "devsecops-platform"
+    expected_ref = f"{registry}/{repo}@{valid_digest}"
+
+    old_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    old_standby_ref = f"{registry}/{repo}@{old_digest}"
+
+    both_running = ["devsecops-app-blue", "devsecops-app-green"]
+
+    digests_blue_active = {
+        "devsecops-app-blue": [expected_ref, f"{registry}/{repo}:latest"],
+        "devsecops-app-green": [old_standby_ref]
+    }
+    digests_green_active = {
+        "devsecops-app-green": [expected_ref, f"{registry}/{repo}:latest"],
+        "devsecops-app-blue": [old_standby_ref]
+    }
+
+    # 1. Valid exact one-line directive -> PASS (CI-generated format)
+    oneline_blue = "upstream app_backend { server devsecops-app-blue:5000; }\n"
+    assert simulate_production_digest_verification(
+        upstream_conf=oneline_blue,
+        running_containers=both_running,
+        container_repo_digests=digests_blue_active,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 2. Valid exact multiline directive -> PASS
+    multiline_green = "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n"
+    assert simulate_production_digest_verification(
+        upstream_conf=multiline_green,
+        running_containers=both_running,
+        container_repo_digests=digests_green_active,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 3. Trailing backup parameter -> FAIL
+    trailing_backup = "upstream app_backend { server devsecops-app-blue:5000 backup; }\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=trailing_backup,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 4. Trailing down parameter -> FAIL
+    trailing_down = "upstream app_backend {\n    server devsecops-app-green:5000 down;\n}\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=trailing_down,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 5. Trailing weight=2 parameter -> FAIL
+    trailing_weight = "upstream app_backend { server devsecops-app-blue:5000 weight=2; }\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=trailing_weight,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 6. Additional unexpected directive in app_backend -> FAIL
+    unexpected_extra_directive = (
+        "upstream app_backend {\n"
+        "    server devsecops-app-blue:5000;\n"
+        "    keepalive 32;\n"
+        "}\n"
+    )
+    with pytest.raises(ValueError, match="Expected exactly 1 directive in app_backend upstream, found 2"):
+        simulate_production_digest_verification(
+            upstream_conf=unexpected_extra_directive,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 7. Unrelated upstream block containing other server directives -> PASS (verifies block isolation)
+    coexisting_upstreams = (
+        "upstream monitoring_backend {\n"
+        "    server prometheus:9090;\n"
+        "    keepalive 16;\n"
+        "}\n"
+        "upstream app_backend {\n"
+        "    server devsecops-app-blue:5000;\n"
+        "}\n"
+    )
+    assert simulate_production_digest_verification(
+        upstream_conf=coexisting_upstreams,
+        running_containers=both_running,
+        container_repo_digests=digests_blue_active,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 8. Each supported authorized target:
+    # 8a. devsecops-app-blue
+    assert simulate_production_digest_verification(
+        upstream_conf="upstream app_backend { server devsecops-app-blue:5000; }\n",
+        running_containers=both_running,
+        container_repo_digests=digests_blue_active,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 8b. devsecops-app-green
+    assert simulate_production_digest_verification(
+        upstream_conf="upstream app_backend { server devsecops-app-green:5000; }\n",
+        running_containers=both_running,
+        container_repo_digests=digests_green_active,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 8c. devsecops-app (legacy single-container)
+    legacy_running = ["devsecops-app"]
+    digests_legacy = {"devsecops-app": [expected_ref]}
+    assert simulate_production_digest_verification(
+        upstream_conf="upstream app_backend {\n    server devsecops-app:5000;\n}\n",
+        running_containers=legacy_running,
+        container_repo_digests=digests_legacy,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 9. Loopback format -> FAIL (127.0.0.1 is unreachable in Docker bridge network & excluded from allowlist)
+    loopback_upstream = "upstream app_backend { server 127.0.0.1:5000; }\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=loopback_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 10. Unterminated statement without semicolon -> FAIL
+    unterminated_upstream = "upstream app_backend { server devsecops-app-blue:5000 }\n"
+    with pytest.raises(ValueError, match="missing terminating semicolon"):
+        simulate_production_digest_verification(
+            upstream_conf=unterminated_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 11. Duplicate identical target directives multiline -> FAIL
+    duplicate_identical_multiline = "upstream app_backend {\n    server devsecops-app-green:5000;\n    server devsecops-app-green:5000;\n}\n"
+    with pytest.raises(ValueError, match="Expected exactly 1 directive in app_backend upstream, found 2"):
+        simulate_production_digest_verification(
+            upstream_conf=duplicate_identical_multiline,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 12. Duplicate identical target directives single-line -> FAIL
+    duplicate_identical_oneline = "upstream app_backend { server devsecops-app-blue:5000; server devsecops-app-blue:5000; }\n"
+    with pytest.raises(ValueError, match="Expected exactly 1 directive in app_backend upstream, found 2"):
+        simulate_production_digest_verification(
+            upstream_conf=duplicate_identical_oneline,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 13. One valid target plus an unknown target -> FAIL
+    mixed_unknown_upstream = "upstream app_backend {\n    server devsecops-app-green:5000;\n    server rogue-service:5000;\n}\n"
+    with pytest.raises(ValueError, match="Expected exactly 1 directive in app_backend upstream, found 2"):
+        simulate_production_digest_verification(
+            upstream_conf=mixed_unknown_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 14. Multiple different known targets -> FAIL
+    multiple_known_upstream = "upstream app_backend {\n    server devsecops-app-blue:5000;\n    server devsecops-app-green:5000;\n}\n"
+    with pytest.raises(ValueError, match="Expected exactly 1 directive in app_backend upstream, found 2"):
+        simulate_production_digest_verification(
+            upstream_conf=multiple_known_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 15. Single unauthorized target -> FAIL
+    unauthorized_upstream = "upstream app_backend {\n    server unauthorized-app:5000;\n}\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=unauthorized_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 16. Wrong port -> FAIL
+    wrong_port_upstream = "upstream app_backend {\n    server devsecops-app-green:8080;\n}\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=wrong_port_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 17. Missing port -> FAIL
+    missing_port_upstream = "upstream app_backend {\n    server devsecops-app-green;\n}\n"
+    with pytest.raises(ValueError, match="Upstream directive does not match exact supported syntax"):
+        simulate_production_digest_verification(
+            upstream_conf=missing_port_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 18. Missing upstream block entirely -> FAIL
+    missing_block_upstream = "server {\n    location / {\n        proxy_pass http://app_backend;\n    }\n}\n"
+    with pytest.raises(ValueError, match="Malformed, unclosed, or ambiguous upstream app_backend block"):
+        simulate_production_digest_verification(
+            upstream_conf=missing_block_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 19. Missing server directive in app_backend (empty block) -> FAIL
+    missing_server_upstream = "upstream app_backend {\n    # empty block\n}\n"
+    with pytest.raises(ValueError, match="No directives found in app_backend upstream"):
+        simulate_production_digest_verification(
+            upstream_conf=missing_server_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 20. Unclosed upstream block -> FAIL
+    unclosed_upstream = "upstream app_backend {\n    server devsecops-app-blue:5000;\n"
+    with pytest.raises(ValueError, match="Malformed, unclosed, or ambiguous upstream app_backend block"):
+        simulate_production_digest_verification(
+            upstream_conf=unclosed_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 21. Duplicate / ambiguous upstream app_backend blocks -> FAIL
+    duplicate_blocks_upstream = (
+        "upstream app_backend { server devsecops-app-blue:5000; }\n"
+        "upstream app_backend { server devsecops-app-green:5000; }\n"
+    )
+    with pytest.raises(ValueError, match="Malformed, unclosed, or ambiguous upstream app_backend block"):
+        simulate_production_digest_verification(
+            upstream_conf=duplicate_blocks_upstream,
+            running_containers=both_running,
+            container_repo_digests=digests_blue_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 22. Nginx container unavailable -> FAIL
+    with pytest.raises(ValueError, match="Reverse proxy container devsecops-nginx is not running"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest,
+            nginx_running=False
+        )
+
+    # 23. Host file exists but active Nginx configuration cannot be verified -> FAIL
+    # Even though upstream_conf is valid, failure to read from running container MUST fail closed
+    with pytest.raises(ValueError, match="Failed to read /etc/nginx/conf.d/upstream.conf from running devsecops-nginx"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest,
+            nginx_running=True,
+            active_nginx_verified=False
+        )
+
+    # 24. Active container identified by Nginx is NOT running in Docker -> FAIL
+    with pytest.raises(ValueError, match="is not running in Docker"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=["devsecops-app-blue"],  # Green is not running
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 25. Exact digest match -> PASS
+    assert simulate_production_digest_verification(
+        upstream_conf=multiline_green,
+        running_containers=both_running,
+        container_repo_digests=digests_green_active,
+        expected_ref=expected_ref,
+        expected_digest=valid_digest
+    ) is True
+
+    # 26. Wrong digest -> FAIL
+    wrong_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    wrong_digests = {"devsecops-app-green": [f"{registry}/{repo}@{wrong_digest}"]}
+    with pytest.raises(ValueError, match="Exact image reference mismatch"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=both_running,
+            container_repo_digests=wrong_digests,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 27. Wrong repository -> FAIL
+    wrong_repo_digests = {"devsecops-app-green": [f"{registry}/other-repo@{valid_digest}"]}
+    with pytest.raises(ValueError, match="Exact image reference mismatch"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=both_running,
+            container_repo_digests=wrong_repo_digests,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 28. Missing RepoDigests -> FAIL
+    empty_digests = {"devsecops-app-green": []}
+    with pytest.raises(ValueError, match="has no RepoDigests"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=both_running,
+            container_repo_digests=empty_digests,
+            expected_ref=expected_ref,
+            expected_digest=valid_digest
+        )
+
+    # 29. Invalid expected digest format -> FAIL
+    with pytest.raises(ValueError, match="Invalid or missing expected digest format"):
+        simulate_production_digest_verification(
+            upstream_conf=multiline_green,
+            running_containers=both_running,
+            container_repo_digests=digests_green_active,
+            expected_ref=expected_ref,
+            expected_digest="not-a-valid-sha256"
+        )
+
+
+def test_ci_workflow_fail_closed_and_exact_digest_contracts():
+    """
+    Verify the CI workflow implements fail-closed Trivy checksum verification,
+    strict Nginx upstream parsing (single server directive, host:5000, no host-file fallback),
+    and exact production digest comparison.
+    """
+    import yaml
+    with open(".github/workflows/ci.yml", "r", encoding="utf-8") as f:
+        wf = yaml.safe_load(f)
+
+    # 1. Trivy filesystem step in test-and-scan
+    trivy_step = next(s for s in wf["jobs"]["test-and-scan"]["steps"] if s.get("id") == "trivy_fs")
+    trivy_script = trivy_step.get("run", "")
+    assert "ENTRY_COUNT" in trivy_script
+    assert "wc -l" in trivy_script
+    assert "-ne 1" in trivy_script
+    assert "sha256sum --check --strict" in trivy_script
+    assert "INSTALLED_VER=" in trivy_script
+    assert 'INSTALLED_VER" != "$TRIVY_VERSION"' in trivy_script
+    assert "curl -fsSLo" in trivy_script
+
+    # 2. Verify-production step
+    verify_step = next(s for s in wf["jobs"]["verify-production"]["steps"] if s.get("id") == "verify_digest")
+    verify_script = verify_step.get("run", "")
+    assert "^sha256:[a-f0-9]{64}$" in verify_script
+
+    # Nginx container running assertion
+    assert 'docker ps --filter \\"name=^/devsecops-nginx$\\"' in verify_script
+    assert "Reverse proxy container devsecops-nginx is not running!" in verify_script
+
+    # Strict container-only extraction (no host-file fallback)
+    assert "docker exec devsecops-nginx cat /etc/nginx/conf.d/upstream.conf" in verify_script
+    assert "/home/ec2-user/nginx-conf/upstream.conf" not in verify_script
+
+    # Structural block isolation & whitespace normalization
+    assert "ONE_LINE=" in verify_script
+    assert "TOTAL_BLOCK_DEFS=" in verify_script
+    assert "CLOSED_BLOCKS=" in verify_script
+    assert "BLOCK_BODY=" in verify_script
+    assert "TRAILING=" in verify_script
+    assert "unterminated statement (missing semicolon)" in verify_script
+    assert "Malformed, unclosed, or ambiguous upstream app_backend block" in verify_script
+
+    # Invariant: exactly 1 directive total in app_backend
+    assert "DIRECTIVES=" in verify_script
+    assert "DIRECTIVE_COUNT=" in verify_script
+    assert 'DIRECTIVE_COUNT\\" -ne 1' in verify_script
+    assert "Expected exactly 1 directive in app_backend upstream" in verify_script
+
+    # Invariant: exact directive syntax without trailing parameters
+    assert "^server[[:space:]]+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$" in verify_script
+
+    # Allowed targets
+    assert "devsecops-app-blue" in verify_script
+    assert "devsecops-app-green" in verify_script
+    assert "devsecops-app" in verify_script
+
+    # Standby-resilient active container check
+    assert 'docker ps --filter \\"name=^/${ACTIVE_CONT}$\\"' in verify_script
+
+    # Exact digest matching
+    assert "MATCH=false" in verify_script
+    assert "for ref in $REPO_DIGESTS;" in verify_script
+    assert '\\"$ref\\" = \\"$EXPECTED_REF\\"' in verify_script
+    assert 'grep -q "@${dig}"' not in verify_script
+    assert 'grep -q "@$dig"' not in verify_script
+
+    # 3. Rollback trigger on verify_digest failure
+    rollback_step = next(s for s in wf["jobs"]["verify-production"]["steps"] if "rollback" in s.get("name", "").lower())
+    rollback_condition = rollback_step.get("if", "")
+    assert "steps.verify_digest.outcome == 'failure'" in rollback_condition

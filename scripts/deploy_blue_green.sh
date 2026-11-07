@@ -398,6 +398,12 @@ if [ -z "$DEPLOY_IMAGE" ]; then
     exit 1
 fi
 
+if ! echo "$DEPLOY_IMAGE" | grep -E -q '@sha256:[a-f0-9]{64}$'; then
+    log_error "Deployment rejected: DEPLOY_IMAGE must reference an immutable digest (@sha256:<64-hex-digest>). Received: '$DEPLOY_IMAGE'"
+    log_error "Deployments using mutable tags (such as :latest or raw tag names) are strictly forbidden."
+    exit 1
+fi
+
 acquire_lock
 
 log_info "Initiating Blue/Green deployment for image: $DEPLOY_IMAGE"

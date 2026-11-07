@@ -149,18 +149,243 @@ jobs:
       - name: Run Trivy filesystem scan
         id: trivy_fs
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          trivy fs --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore .
+          echo "=== Installing pinned Trivy (v0.76.2) with fail-closed SHA256 checksum verification ==="
+          TRIVY_VERSION="0.76.2"
+          TARBALL="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          CHECKSUMS="trivy_${TRIVY_VERSION}_checksums.txt"
+
+          curl -fsSLo "/tmp/$CHECKSUMS" -L --connect-timeout 10 --max-time 30 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$CHECKSUMS"
+          curl -fsSLo "/tmp/$TARBALL" -L --connect-timeout 10 --max-time 60 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$TARBALL"
+
+          if [ ! -s "/tmp/$CHECKSUMS" ]; then
+            echo "ERROR: Downloaded checksum file ($CHECKSUMS) is missing or empty!" >&2
+            exit 1
+          fi
+
+          if [ ! -s "/tmp/$TARBALL" ]; then
+            echo "ERROR: Downloaded tarball ($TARBALL) is missing or empty!" >&2
+            exit 1
+          fi
+
+          echo "=== Verifying Trivy binary checksum manifest (fail-closed) ==="
+          MATCH_LINES=$(grep -E "^[a-fA-F0-9]{64}[[:space:]]+(\*)?${TARBALL}$" "/tmp/$CHECKSUMS" || true)
+
+          if [ -z "$MATCH_LINES" ]; then
+            echo "ERROR: No matching checksum entry found for $TARBALL in manifest!" >&2
+            exit 1
+          fi
+
+          ENTRY_COUNT=$(printf '%s\n' "$MATCH_LINES" | wc -l)
+          if [ "$ENTRY_COUNT" -ne 1 ]; then
+            echo "ERROR: Expected exactly 1 checksum entry for $TARBALL in manifest, found $ENTRY_COUNT!" >&2
+            exit 1
+          fi
+
+          EXPECTED_HASH=$(printf '%s\n' "$MATCH_LINES" | awk '{print $1}')
+          EXPECTED_FILE=$(printf '%s\n' "$MATCH_LINES" | awk '{print $2}' | sed 's/^\*//')
+
+          if ! echo "$EXPECTED_HASH" | grep -E -q '^[a-fA-F0-9]{64}$'; then
+            echo "ERROR: Malformed SHA256 checksum in manifest entry: '$EXPECTED_HASH'!" >&2
+            exit 1
+          fi
+
+          if [ "$EXPECTED_FILE" != "$TARBALL" ]; then
+            echo "ERROR: Checksum manifest filename mismatch! Expected: '$TARBALL', found: '$EXPECTED_FILE'" >&2
+            exit 1
+          fi
+
+          printf '%s  %s\n' "$EXPECTED_HASH" "$TARBALL" > /tmp/expected_checksum.txt
+          if ! (cd /tmp && sha256sum --check --strict expected_checksum.txt); then
+            echo "ERROR: SHA256 checksum verification failed for $TARBALL!" >&2
+            exit 1
+          fi
+
+          echo "=== Extracting Trivy binary ==="
+          sudo tar -xzf "/tmp/$TARBALL" -C /usr/local/bin trivy
+          rm -f "/tmp/$TARBALL" "/tmp/$CHECKSUMS" /tmp/expected_checksum.txt
+          sudo chmod +x /usr/local/bin/trivy
+
+          if [ ! -x /usr/local/bin/trivy ]; then
+            echo "ERROR: Trivy binary was not installed or is not executable!" >&2
+            exit 1
+          fi
+
+          INSTALLED_VER=$(trivy --version | head -n1 | grep -E -o '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          echo "Installed Trivy version: $INSTALLED_VER"
+          if [ "$INSTALLED_VER" != "$TRIVY_VERSION" ]; then
+            echo "ERROR: Installed Trivy version ($INSTALLED_VER) does not match expected version ($TRIVY_VERSION)!" >&2
+            exit 1
+          fi
+
+          echo "=== Running Trivy filesystem scan ==="
+          trivy fs --format json --output trivy-fs-results.json .
+          trivy fs --format sarif --output trivy-fs.sarif .
+          trivy fs --format table --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL .
+
+          FS_CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-fs-results.json 2>/dev/null || echo 0)
+          FS_HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-fs-results.json 2>/dev/null || echo 0)
+          FS_MED=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-fs-results.json 2>/dev/null || echo 0)
+          FS_LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-fs-results.json 2>/dev/null || echo 0)
+
+          echo "### Trivy Filesystem Scan Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Severity | Findings |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CRITICAL | $FS_CRIT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| HIGH | $FS_HIGH |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| MEDIUM | $FS_MED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| LOW | $FS_LOW |" >> "$GITHUB_STEP_SUMMARY"
+
+          trivy fs --severity HIGH,CRITICAL --exit-code 1 .
 
       - name: Build Docker image for security scan
         id: build_docker
         run: |
-          docker build -t devsecops-platform -f docker/Dockerfile .
+          echo "=== Building Docker container image (single build) ==="
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          docker build \
+            --build-arg BUILD_REVISION="${{ github.sha }}" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            -t "devsecops-platform:${{ github.sha }}" \
+            -t devsecops-platform:latest \
+            -f docker/Dockerfile .
+
+          IMAGE_ID=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
+          echo "Built Docker Image ID: $IMAGE_ID"
+          echo "image_id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Container image smoke test
+        id: smoke_test
+        env:
+          EXPECTED_IMAGE_ID: ${{ steps.build_docker.outputs.image_id }}
+        run: |
+          echo "=== Running container image smoke test ==="
+          CURRENT_ID=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
+          if [ -n "$EXPECTED_IMAGE_ID" ] && [ "$CURRENT_ID" != "$EXPECTED_IMAGE_ID" ]; then
+            echo "ERROR: Image ID mismatch before smoke test! Expected $EXPECTED_IMAGE_ID, found $CURRENT_ID" >&2
+            exit 1
+          fi
+
+          SMOKE_CONTAINER="smoke-test-app-${RANDOM}"
+          trap 'docker rm -f "$SMOKE_CONTAINER" >/dev/null 2>&1 || true' EXIT
+
+          docker run -d --name "$SMOKE_CONTAINER" -p 5000:5000 "devsecops-platform:${{ github.sha }}"
+
+          MAX_WAIT=30
+          START_TIME=$(date +%s)
+          SMOKE_PASSED=false
+
+          while [ $(( $(date +%s) - START_TIME )) -lt $MAX_WAIT ]; do
+            RESP=$(curl -s --connect-timeout 2 --max-time 5 http://localhost:5000/health || echo "")
+            if echo "$RESP" | grep -q '"status"[[:space:]]*:[[:space:]]*"healthy"'; then
+              SMOKE_PASSED=true
+              echo "Smoke test passed: container started and responded with healthy status on /health!"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$SMOKE_PASSED" != "true" ]; then
+            echo "ERROR: Container smoke test failed to become healthy within ${MAX_WAIT}s" >&2
+            docker logs "$SMOKE_CONTAINER" || true
+            exit 1
+          fi
+
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null 2>&1 || true
+          trap - EXIT
 
       - name: Scan Docker image with Trivy
         id: trivy_image
+        env:
+          EXPECTED_IMAGE_ID: ${{ steps.build_docker.outputs.image_id }}
         run: |
-          trivy image --format table --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore devsecops-platform:latest
+          echo "=== Scanning verified Docker image with Trivy ==="
+          SCAN_IMAGE_ID=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
+          echo "Scanning Docker Image ID: $SCAN_IMAGE_ID"
+
+          if [ -n "$EXPECTED_IMAGE_ID" ] && [ "$SCAN_IMAGE_ID" != "$EXPECTED_IMAGE_ID" ]; then
+            echo "ERROR: Image ID mismatch before security scan! Expected $EXPECTED_IMAGE_ID, found $SCAN_IMAGE_ID" >&2
+            exit 1
+          fi
+
+          trivy image --format json --output trivy-image-results.json "devsecops-platform:${{ github.sha }}"
+          trivy image --format sarif --output trivy-image.sarif "devsecops-platform:${{ github.sha }}"
+          trivy image --format table --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL "devsecops-platform:${{ github.sha }}"
+
+          echo "=== Generating CycloneDX SBOM ==="
+          trivy image --format cyclonedx --output sbom.json "devsecops-platform:${{ github.sha }}"
+
+          if [ ! -s sbom.json ]; then
+            echo "ERROR: Generated SBOM is empty!" >&2
+            exit 1
+          fi
+          if ! jq -e '.bomFormat == "CycloneDX"' sbom.json >/dev/null; then
+            echo "ERROR: Generated SBOM is not valid CycloneDX JSON!" >&2
+            exit 1
+          fi
+          echo "CycloneDX SBOM generated and verified successfully."
+
+          IMG_CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-image-results.json 2>/dev/null || echo 0)
+          IMG_HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-image-results.json 2>/dev/null || echo 0)
+          IMG_MED=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-image-results.json 2>/dev/null || echo 0)
+          IMG_LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-image-results.json 2>/dev/null || echo 0)
+
+          echo "### Trivy Container Image Scan Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Severity | Findings |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CRITICAL | $IMG_CRIT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| HIGH | $IMG_HIGH |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| MEDIUM | $IMG_MED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| LOW | $IMG_LOW |" >> "$GITHUB_STEP_SUMMARY"
+
+          trivy image --severity HIGH,CRITICAL --exit-code 1 "devsecops-platform:${{ github.sha }}"
+
+      - name: Upload security scan evidence and SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-evidence-${{ github.sha }}
+          path: |
+            trivy-fs-results.json
+            trivy-fs.sarif
+            trivy-image-results.json
+            trivy-image.sarif
+            sbom.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Archive verified Docker image for publication
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
+        env:
+          EXPECTED_IMAGE_ID: ${{ steps.build_docker.outputs.image_id }}
+        run: |
+          echo "=== Archiving verified Docker image for publication ==="
+          ARCHIVE_ID=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
+          if [ -n "$EXPECTED_IMAGE_ID" ] && [ "$ARCHIVE_ID" != "$EXPECTED_IMAGE_ID" ]; then
+            echo "ERROR: Image ID mismatch before archiving! Expected $EXPECTED_IMAGE_ID, found $ARCHIVE_ID" >&2
+            exit 1
+          fi
+
+          mkdir -p /tmp/image-artifact
+          docker save "devsecops-platform:${{ github.sha }}" -o /tmp/image-artifact/devsecops-platform-image.tar
+          cat << EOF > /tmp/image-artifact/image-metadata.json
+          {
+            "commit_sha": "${{ github.sha }}",
+            "image_id": "$ARCHIVE_ID",
+            "image_tag": "devsecops-platform:${{ github.sha }}",
+            "created_at": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          }
+          EOF
+
+      - name: Upload verified Docker image artifact
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-docker-image-${{ github.sha }}
+          path: /tmp/image-artifact/
+          retention-days: 1
+          if-no-files-found: error
 
   # ============================================================================
   # 2. PUBLISH ECR (Runs only on manual workflow_dispatch on main with deploy_to_production: true)
@@ -170,6 +395,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test-and-scan]
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
+    outputs:
+      image_digest: ${{ steps.push_image.outputs.image_digest }}
+      image_uri: ${{ steps.push_image.outputs.image_uri }}
 
     steps:
       - name: Checkout code
@@ -179,6 +407,36 @@ jobs:
         run: |
           echo '{"features": {"containerd-snapshotter": false}}' | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
+
+      - name: Download verified Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-docker-image-${{ github.sha }}
+          path: /tmp/image-artifact
+
+      - name: Load and verify Docker image
+        id: load_image
+        run: |
+          echo "=== Loading verified Docker image ==="
+          if [ ! -f /tmp/image-artifact/devsecops-platform-image.tar ]; then
+            echo "ERROR: Verified image artifact not found!" >&2
+            exit 1
+          fi
+
+          LOAD_OUTPUT=$(docker load -i /tmp/image-artifact/devsecops-platform-image.tar)
+          echo "$LOAD_OUTPUT"
+
+          RECORDED_ID=$(jq -r .image_id /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          LOADED_ID=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
+
+          echo "Recorded Image ID: $RECORDED_ID"
+          echo "Loaded Image ID:   $LOADED_ID"
+
+          if [ -n "$RECORDED_ID" ] && [ "$LOADED_ID" != "$RECORDED_ID" ]; then
+            echo "ERROR: Loaded image ID does not match recorded image ID from test-and-scan!" >&2
+            exit 1
+          fi
+          echo "Docker image ID verified successfully: $LOADED_ID"
 
       - name: Configure AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
@@ -190,16 +448,49 @@ jobs:
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
       - name: Build, tag, and push image to ECR
+        id: push_image
         env:
           ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID || '850252650249' }}.dkr.ecr.ap-south-1.amazonaws.com
           ECR_REPOSITORY: devsecops-platform
           IMAGE_TAG: ${{ github.sha }}
-          BUILDX_NO_DEFAULT_ATTESTATIONS: 1
         run: |
-          docker build --provenance=false -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f docker/Dockerfile .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "=== Tagging loaded verified image for ECR ==="
+          docker tag "devsecops-platform:${IMAGE_TAG}" "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker tag "devsecops-platform:${IMAGE_TAG}" "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          echo "=== Pushing image to ECR ==="
+          PUSH_OUTPUT=$(docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG")
+          echo "$PUSH_OUTPUT"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          echo "=== Querying authoritative ECR registry digest for tag $IMAGE_TAG ==="
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text \
+            --region ap-south-1 2>/dev/null || true)
+
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            DIGEST=$(echo "$PUSH_OUTPUT" | grep -E -o 'sha256:[a-f0-9]{64}' | head -n1 || true)
+          fi
+
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            DIGEST=$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" 2>/dev/null | grep "^$ECR_REGISTRY/$ECR_REPOSITORY@sha256:" | cut -d@ -f2 | head -n1 || true)
+          fi
+
+          echo "Captured Authoritative ECR Digest: $DIGEST"
+
+          if ! echo "$DIGEST" | grep -E -q '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Failed to capture valid SHA256 image digest from ECR for tag '$IMAGE_TAG'! Captured: '$DIGEST'" >&2
+            exit 1
+          fi
+
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY@$DIGEST"
+          echo "Validated Immutable Image URI: $IMAGE_URI"
+
+          echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
   # ============================================================================
   # 3. DEPLOY BLUE/GREEN (Safe traffic switch via SSM on target EC2 instance)
@@ -248,8 +539,15 @@ jobs:
           TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID || '850252650249' }}
           IMAGE_TAG: ${{ github.sha }}
+          IMAGE_DIGEST: ${{ needs.publish-ecr.outputs.image_digest }}
+          IMAGE_URI: ${{ needs.publish-ecr.outputs.image_uri }}
         run: |
-          DEPLOY_IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:${IMAGE_TAG}"
+          DEPLOY_IMAGE="${IMAGE_URI:-${AWS_ACCOUNT_ID}.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform@${IMAGE_DIGEST}}"
+          if ! echo "$DEPLOY_IMAGE" | grep -q '@sha256:'; then
+            echo "ERROR: DEPLOY_IMAGE must reference an immutable digest (@sha256:...), found '$DEPLOY_IMAGE'" >&2
+            exit 1
+          fi
+          echo "Deploying verified immutable container image: $DEPLOY_IMAGE"
           DEPLOY_SCRIPT_GZ_B64=$(gzip -9c scripts/deploy_blue_green.sh | base64 -w 0)
           DASHBOARD_GZ_B64=$(gzip -9c monitoring/grafana/dashboards/devsecops-dashboard.json | base64 -w 0)
 
@@ -764,7 +1062,7 @@ jobs:
   verify-production:
     name: Verify Production Health
     runs-on: ubuntu-latest
-    needs: [deploy-blue-green]
+    needs: [deploy-blue-green, publish-ecr]
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
 
     steps:
@@ -845,8 +1143,113 @@ jobs:
             exit 1
           fi
 
+      - name: Verify running container image digest matches published ECR digest
+        id: verify_digest
+        env:
+          TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
+          EXPECTED_DIGEST: ${{ needs.publish-ecr.outputs.image_digest }}
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID || '850252650249' }}.dkr.ecr.ap-south-1.amazonaws.com
+          ECR_REPOSITORY: devsecops-platform
+        run: |
+          echo "Verifying running container image digest matches published ECR digest: $EXPECTED_DIGEST"
+          if [ -z "$EXPECTED_DIGEST" ] || [ "$EXPECTED_DIGEST" = "null" ]; then
+            echo "ERROR: Expected ECR image digest is missing from publication job output!" >&2
+            exit 1
+          fi
+
+          if ! echo "$EXPECTED_DIGEST" | grep -E -q '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Expected ECR image digest format is invalid: '$EXPECTED_DIGEST' (must match ^sha256:[a-f0-9]{64}$)" >&2
+            exit 1
+          fi
+
+          EXPECTED_REF="${ECR_REGISTRY}/${ECR_REPOSITORY}@${EXPECTED_DIGEST}"
+          echo "Expected full image reference: $EXPECTED_REF"
+
+          DIGEST_PAYLOAD=$(jq -n \
+            --arg inst "$TARGET_INSTANCE_ID" \
+            --arg exp_ref "$EXPECTED_REF" \
+            --arg exp_dig "$EXPECTED_DIGEST" '{
+            "InstanceIds": [$inst],
+            "DocumentName": "AWS-RunShellScript",
+            "Parameters": {
+              "commands": [
+                ("EXPECTED_REF=\"" + $exp_ref + "\""),
+                ("EXPECTED_DIGEST=\"" + $exp_dig + "\""),
+                "if ! echo \"$EXPECTED_DIGEST\" | grep -E -q \"^sha256:[a-f0-9]{64}$\"; then echo \"ERROR: Invalid digest format: $EXPECTED_DIGEST\" >&2; exit 1; fi",
+                "if ! docker ps --filter \"name=^/devsecops-nginx$\" --filter \"status=running\" --format \"{{.Names}}\" | grep -q \"^devsecops-nginx$\"; then echo \"ERROR: Reverse proxy container devsecops-nginx is not running!\" >&2; exit 1; fi",
+                "UPSTREAM_CONF=$(docker exec devsecops-nginx cat /etc/nginx/conf.d/upstream.conf 2>/dev/null || true)",
+                "if [ -z \"$UPSTREAM_CONF\" ]; then echo \"ERROR: Failed to read /etc/nginx/conf.d/upstream.conf from running devsecops-nginx!\" >&2; exit 1; fi",
+                "CLEAN_UPSTREAM=$(echo \"$UPSTREAM_CONF\" | sed -e \"s/#.*//\")",
+                "ONE_LINE=$(echo \"$CLEAN_UPSTREAM\" | tr \"\\n\" \" \" | tr -s \" \")",
+                "TOTAL_BLOCK_DEFS=$(echo \"$ONE_LINE\" | grep -o \"upstream[[:space:]]\\+app_backend[[:space:]]*{\" | wc -l)",
+                "CLOSED_BLOCKS=$(echo \"$ONE_LINE\" | grep -o \"upstream[[:space:]]\\+app_backend[[:space:]]*{[^{}]*}\" | wc -l)",
+                "if [ \"$TOTAL_BLOCK_DEFS\" -ne 1 ] || [ \"$CLOSED_BLOCKS\" -ne 1 ]; then echo \"ERROR: Malformed, unclosed, or ambiguous upstream app_backend block!\" >&2; exit 1; fi",
+                "BLOCK_BODY=$(echo \"$ONE_LINE\" | sed -e \"s/.*upstream[[:space:]]\\+app_backend[[:space:]]*{//\" -e \"s/}.*//\")",
+                "TRAILING=$(echo \"$BLOCK_BODY\" | sed -e \"s/.*;//\" | tr -d \"[:space:]\")",
+                "if [ -n \"$TRAILING\" ]; then echo \"ERROR: Malformed upstream app_backend block: unterminated statement (missing semicolon)!\" >&2; exit 1; fi",
+                "DIRECTIVES=$(echo \"$BLOCK_BODY\" | tr \";\" \"\\n\" | sed -e \"s/^[[:space:]]*//\" -e \"s/[[:space:]]*$//\" | grep -v \"^$\" || true)",
+                "if [ -z \"$DIRECTIVES\" ]; then echo \"ERROR: No directives found in app_backend upstream block!\" >&2; exit 1; fi",
+                "DIRECTIVE_COUNT=$(echo \"$DIRECTIVES\" | wc -l)",
+                "if [ \"$DIRECTIVE_COUNT\" -ne 1 ]; then echo \"ERROR: Expected exactly 1 directive in app_backend upstream, found $DIRECTIVE_COUNT:\" >&2; echo \"$DIRECTIVES\" >&2; exit 1; fi",
+                "if ! echo \"$DIRECTIVES\" | grep -E -q \"^server[[:space:]]+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$\"; then echo \"ERROR: Directive does not match exact supported syntax 'server <authorized-host>:5000' with no trailing parameters: '$DIRECTIVES'\" >&2; exit 1; fi",
+                "ACTIVE_CONT=$(echo \"$DIRECTIVES\" | sed -e \"s/^server[[:space:]]\\+//\" | cut -d: -f1)",
+                "echo \"Authoritatively verified active production container from running Nginx: $ACTIVE_CONT\"",
+                "if ! docker ps --filter \"name=^/${ACTIVE_CONT}$\" --filter \"status=running\" --format \"{{.Names}}\" | grep -q \"^${ACTIVE_CONT}$\"; then echo \"ERROR: Active container \\\"$ACTIVE_CONT\\\" is not running in Docker!\" >&2; exit 1; fi",
+                "REPO_DIGESTS=$(docker inspect \"$ACTIVE_CONT\" --format \"{{range .RepoDigests}}{{.}} {{end}}\")",
+                "echo \"Running Container: $ACTIVE_CONT\"",
+                "echo \"Image RepoDigests: $REPO_DIGESTS\"",
+                "if [ -z \"$REPO_DIGESTS\" ] || [ \"$REPO_DIGESTS\" = \" \" ]; then echo \"ERROR: Container $ACTIVE_CONT has no RepoDigests!\" >&2; exit 1; fi",
+                "MATCH=false",
+                "for ref in $REPO_DIGESTS; do if [ \"$ref\" = \"$EXPECTED_REF\" ]; then MATCH=true; break; fi; done",
+                "if [ \"$MATCH\" != \"true\" ]; then echo \"ERROR: Exact image reference mismatch! Expected: $EXPECTED_REF, found: $REPO_DIGESTS\" >&2; exit 1; fi",
+                "echo \"Exact image reference verified successfully on running container: $EXPECTED_REF\""
+              ]
+            }
+          }')
+
+          COMMAND_ID=$(aws ssm send-command \
+            --cli-input-json "$DIGEST_PAYLOAD" \
+            --region ap-south-1 \
+            --query "Command.CommandId" \
+            --output text)
+
+          if [ -z "$COMMAND_ID" ] || [ "$COMMAND_ID" = "None" ]; then
+            echo "ERROR: Failed to dispatch SSM digest verification command" >&2
+            exit 1
+          fi
+
+          MAX_WAIT=60
+          START_TIME=$(date +%s)
+          STATUS=""
+
+          while [ $(( $(date +%s) - START_TIME )) -lt $MAX_WAIT ]; do
+            STATUS=$(timeout 15 aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$TARGET_INSTANCE_ID" \
+              --region ap-south-1 \
+              --query "Status" \
+              --output text 2>/dev/null) || STATUS=""
+
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ]; then
+              break
+            fi
+            sleep 3
+          done
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "ERROR: SSM container image digest verification failed with status: $STATUS" >&2
+            INVOCATION_ERR=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$TARGET_INSTANCE_ID" \
+              --region ap-south-1 \
+              --output json 2>/dev/null || true)
+            echo "$INVOCATION_ERR" | jq -r '.StandardErrorContent // empty'
+            exit 1
+          fi
+          echo "Production running container image digest authoritatively verified against ECR publication."
+
       - name: Trigger automated rollback on external verification failure
-        if: failure() && steps.verify_health.outcome == 'failure'
+        if: failure() && (steps.verify_health.outcome == 'failure' || steps.verify_digest.outcome == 'failure')
         env:
           TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
         run: |
