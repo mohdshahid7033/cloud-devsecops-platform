@@ -28,8 +28,49 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configuration & Configurable Overrides (for testing & production)
 # ------------------------------------------------------------------------------
+resolve_deployment_id() {
+    local img="${1:-${DEPLOY_IMAGE:-}}"
+    local dep_id="${DEPLOYMENT_ID:-}"
+    if [ -n "$dep_id" ]; then
+        echo "$dep_id"
+        return 0
+    fi
+    if [ -n "${GITHUB_SHA:-}" ]; then
+        echo "$GITHUB_SHA"
+        return 0
+    fi
+    if [ -n "$img" ]; then
+        local img_no_digest="${img%%@*}"
+        local last_segment="${img_no_digest##*/}"
+        case "$last_segment" in
+            *:*)
+                echo "${last_segment##*:}"
+                return 0
+                ;;
+            *)
+                case "$img" in
+                    *@sha256:*)
+                        echo "${img##*@sha256:}"
+                        return 0
+                        ;;
+                    *)
+                        echo "${img##*:}"
+                        return 0
+                        ;;
+                esac
+                ;;
+        esac
+    fi
+    echo "unknown"
+}
+
+if [ "${1:-}" = "--extract-deployment-id" ]; then
+    resolve_deployment_id "${2:-}"
+    exit 0
+fi
+
 DEPLOY_IMAGE="${1:-${DEPLOY_IMAGE:-}}"
-DEPLOYMENT_ID="${DEPLOYMENT_ID:-${GITHUB_SHA:-${DEPLOY_IMAGE##*:}}}"
+DEPLOYMENT_ID="$(resolve_deployment_id "$DEPLOY_IMAGE")"
 DEPLOYMENT_STATE_FILE="${DEPLOYMENT_STATE_FILE:-/home/ec2-user/scripts/deployment_state.json}"
 
 DOCKER_CMD="${DOCKER_CMD:-docker}"
@@ -295,23 +336,42 @@ except Exception:
 
     # 6. Execute Rollback
     log_info "Restoring known-good configuration from backup to /etc/nginx/conf.d/upstream.conf..."
-    if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous 2>/dev/null; then
-        $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"
-    elif [ -s /home/ec2-user/nginx-conf/upstream.conf.bak ]; then
-        printf "%b" "$backup_conf" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/conf.d/upstream.conf"
-    fi
 
-    if [ -d /home/ec2-user/nginx-conf ]; then
-        $DOCKER_CMD exec "$NGINX_CONTAINER" cat /etc/nginx/conf.d/upstream.conf > /home/ec2-user/nginx-conf/upstream.conf 2>/dev/null || true
-    fi
-
-    if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -t >/dev/null 2>&1; then
-        log_error "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!"
+    # Guard against missing or malformed backup configuration before touching active configuration
+    if [ -z "$backup_conf" ] || ! echo "$backup_conf" | grep -E -q 'server[[:space:]]+[a-zA-Z0-9_-]+(:[0-9]+)?;' ; then
+        log_error "CRITICAL: Backup upstream configuration is empty, missing, or lacks a valid server directive! Aborting rollback."
         exit 2
     fi
 
-    if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -s reload >/dev/null 2>&1; then
+    local restore_success=false
+    if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous 2>/dev/null; then
+        if $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"; then
+            restore_success=true
+        fi
+    elif [ -s /home/ec2-user/nginx-conf/upstream.conf.bak ]; then
+        if printf "%b" "$backup_conf" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/conf.d/upstream.conf"; then
+            restore_success=true
+        fi
+    fi
+
+    if [ "$restore_success" != true ]; then
+        log_error "CRITICAL: Failed to restore backup configuration to /etc/nginx/conf.d/upstream.conf!"
+        exit 2
+    fi
+
+    local nginx_test_output
+    if ! nginx_test_output=$($DOCKER_CMD exec "$NGINX_CONTAINER" nginx -t 2>&1); then
+        log_error "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!"
+        log_error "Nginx syntax error diagnostics:"
+        echo "$nginx_test_output" >&2
+        exit 2
+    fi
+
+    local nginx_reload_output
+    if ! nginx_reload_output=$($DOCKER_CMD exec "$NGINX_CONTAINER" nginx -s reload 2>&1); then
         log_error "CRITICAL: Restored Nginx reload failed! Manual intervention required!"
+        log_error "Nginx reload error diagnostics:"
+        echo "$nginx_reload_output" >&2
         exit 2
     fi
 
@@ -787,15 +847,24 @@ perform_rollback() {
 
     if $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous; then
         log_info "Restoring known-good configuration from /etc/nginx/upstream.conf.previous..."
-        $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"
-
-        if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -t >/dev/null 2>&1; then
-            log_error "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!"
+        if ! $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"; then
+            log_error "CRITICAL: Failed to write restored configuration to /etc/nginx/conf.d/upstream.conf!"
             exit 2
         fi
 
-        if ! $DOCKER_CMD exec "$NGINX_CONTAINER" nginx -s reload >/dev/null 2>&1; then
+        local nginx_test_output
+        if ! nginx_test_output=$($DOCKER_CMD exec "$NGINX_CONTAINER" nginx -t 2>&1); then
+            log_error "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!"
+            log_error "Nginx syntax error diagnostics:"
+            echo "$nginx_test_output" >&2
+            exit 2
+        fi
+
+        local nginx_reload_output
+        if ! nginx_reload_output=$($DOCKER_CMD exec "$NGINX_CONTAINER" nginx -s reload 2>&1); then
             log_error "CRITICAL: Restored Nginx reload failed! Reverse proxy state uncertain!"
+            log_error "Nginx reload error diagnostics:"
+            echo "$nginx_reload_output" >&2
             exit 2
         fi
 
@@ -837,11 +906,27 @@ if ! echo "$PRIOR_ROUTING_CONFIG" | grep -E -q 'server[[:space:]]+[a-zA-Z0-9_-]+
 fi
 
 log_info "Preserving verified prior routing configuration to /etc/nginx/upstream.conf.previous..."
-printf "%b" "$PRIOR_ROUTING_CONFIG" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/upstream.conf.previous"
+if ! printf "%b" "$PRIOR_ROUTING_CONFIG" | $DOCKER_CMD exec -i "$NGINX_CONTAINER" sh -c "cat > /etc/nginx/upstream.conf.previous"; then
+    log_error "Failed to write /etc/nginx/upstream.conf.previous backup inside reverse proxy. Refusing cutover."
+    exit 1
+fi
 
 if ! $DOCKER_CMD exec "$NGINX_CONTAINER" test -s /etc/nginx/upstream.conf.previous; then
     log_error "Failed to verify /etc/nginx/upstream.conf.previous backup inside reverse proxy. Refusing cutover."
     exit 1
+fi
+
+if [ -d /home/ec2-user/nginx-conf ]; then
+    tmp_bak="/home/ec2-user/nginx-conf/upstream.conf.bak.tmp.$$"
+    if printf "%b" "$PRIOR_ROUTING_CONFIG" > "$tmp_bak" 2>/dev/null; then
+        if ! mv -f "$tmp_bak" /home/ec2-user/nginx-conf/upstream.conf.bak 2>/dev/null; then
+            rm -f "$tmp_bak" 2>/dev/null
+            log_warn "Failed to update host backup /home/ec2-user/nginx-conf/upstream.conf.bak"
+        fi
+    else
+        rm -f "$tmp_bak" 2>/dev/null
+        log_warn "Failed to create host backup temporary file"
+    fi
 fi
 
 log_info "Writing candidate upstream to /etc/nginx/conf.d/upstream.conf..."

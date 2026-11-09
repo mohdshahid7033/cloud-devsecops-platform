@@ -146,6 +146,11 @@ if [ "$1" = "exec" ]; then
     fi
 
     if [[ "$CMD" == *"nginx -t"* ]]; then
+        if [ -f "$STATE_DIR/nginx_rollback_syntax_fail" ]; then
+            echo "nginx: [emerg] host not found in upstream \"devsecops-app-blue\" in /etc/nginx/conf.d/upstream.conf:2" >&2
+            echo "nginx: configuration file /etc/nginx/nginx.conf test failed" >&2
+            exit 1
+        fi
         echo "nginx: syntax ok"
         exit 0
     fi
@@ -171,6 +176,9 @@ if [ "$1" = "exec" ]; then
     fi
 
     if [[ "$CMD" == *"cat /etc/nginx/upstream.conf.previous > /etc/nginx/conf.d/upstream.conf"* ]]; then
+        if [ -f "$STATE_DIR/restore_write_fail" ]; then
+            exit 1
+        fi
         cp "$STATE_DIR/upstream.conf.previous" "$STATE_DIR/upstream.conf" 2>/dev/null || true
         touch "$STATE_DIR/rollback_restored"
         exit 0
@@ -210,8 +218,16 @@ exit 0
     shutil.rmtree(mock_dir, ignore_errors=True)
 
 
-def run_deploy(mock_env, deploy_image="test-repo/app:latest", extra_env=None, args=None):
+DEFAULT_MOCK_DIGEST = "ba018c08cfb1eab89293eee28d92b24b90e801d7994a8df33798cfd5a7fa7cec"
+
+
+def run_deploy(mock_env, deploy_image=None, extra_env=None, args=None, allow_raw_image=False):
     """Executes deploy_blue_green.sh with mocked dependencies and captures output."""
+    if deploy_image is None:
+        deploy_image = f"test-repo/app:latest@sha256:{DEFAULT_MOCK_DIGEST}"
+    elif not allow_raw_image and "@sha256:" not in deploy_image:
+        deploy_image = f"{deploy_image}@sha256:{DEFAULT_MOCK_DIGEST}"
+
     env = os.environ.copy()
     env["DOCKER_CMD"] = mock_env["docker_bin"]
     env["CURL_CMD"] = mock_env["curl_bin"]
@@ -2015,3 +2031,258 @@ def test_external_ssm_recovery_reporting():
     res_timeout = run_ssm_rollback_simulation("TimedOut")
     assert res_timeout.returncode == 1
     assert "CRITICAL: MANUAL INTERVENTION REQUIRED: SSM Rollback command timed out or did not complete." in res_timeout.stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 53: Rollback reports actual Nginx syntax diagnostics on validation failure
+# ------------------------------------------------------------------------------
+def test_rollback_reports_nginx_syntax_diagnostics(mock_env):
+    """
+    Verifies that when nginx -t fails during rollback, the actual syntax error
+    diagnostic is captured and reported in stderr rather than suppressed.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_test",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+    # Trigger mock syntax check failure
+    (mock_env["mock_dir"] / "nginx_rollback_syntax_fail").touch()
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 2
+    assert "CRITICAL: Restored Nginx configuration failed syntax validation! Manual intervention required!" in res.stderr
+    assert "Nginx syntax error diagnostics:" in res.stderr
+    assert "host not found in upstream" in res.stderr and "devsecops-app-blue" in res.stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 54: Rollback failure preserves active candidate container without stopping it
+# ------------------------------------------------------------------------------
+def test_rollback_failure_preserves_candidate_container(mock_env):
+    """
+    Verifies that if Nginx syntax validation fails during rollback, the active
+    healthy candidate container is NEVER stopped or removed.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_test",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "nginx_rollback_syntax_fail").touch()
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 2
+
+    # Assert docker actions log contains zero stops/removals of devsecops-app-green
+    log_file = mock_env["mock_dir"] / "docker_actions.log"
+    actions = log_file.read_text(encoding="utf-8").splitlines() if log_file.exists() else []
+    assert not any("devsecops-app-green" in a for a in actions), f"devsecops-app-green was unexpectedly targeted: {actions}"
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 55: Rollback safely handles empty or malformed backup configuration
+# ------------------------------------------------------------------------------
+def test_rollback_rejects_empty_or_malformed_backup_configuration(mock_env):
+    """
+    Verifies that if the backup configuration is empty or lacks a server directive,
+    the rollback aborts fail-closed (exit 2) before attempting Nginx test or reload.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    # Empty backup file
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text("", encoding="utf-8", newline="\n")
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_test",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 2
+    assert "backup target could not be resolved" in res.stderr or \
+           "Ambiguous rollback state" in res.stderr or \
+           "CRITICAL: Backup upstream configuration is empty" in res.stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 56: Single-file bind mount restoration preserves container-side inode & no host mv
+# ------------------------------------------------------------------------------
+def test_rollback_uses_container_mount_without_host_mv(mock_env):
+    """
+    Verifies that rollback restores configuration strictly through the container-side
+    mounted path /etc/nginx/conf.d/upstream.conf, and that no host-side mv operation
+    targets /home/ec2-user/nginx-conf/upstream.conf.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_test",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 0
+    assert (mock_env["mock_dir"] / "rollback_restored").exists()
+    assert "ROLLBACK VERIFIED" in res.stdout
+
+    # Verify via script inspection that no mv targets upstream.conf (not .bak)
+    with open("scripts/deploy_blue_green.sh", "r", encoding="utf-8") as f:
+        script_content = f.read()
+    import re
+    host_mv_matches = re.findall(r'mv\s+-[^\n]*upstream\.conf(?!\.bak)', script_content)
+    assert len(host_mv_matches) == 0, f"Found host-side mv targeting upstream.conf: {host_mv_matches}"
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 57: Failed container restoration prevents Nginx validation/reload and candidate cleanup
+# ------------------------------------------------------------------------------
+def test_failed_container_restoration_prevents_reload_and_cleanup(mock_env):
+    """
+    Verifies that if writing to /etc/nginx/conf.d/upstream.conf fails during rollback,
+    the script immediately aborts with exit code 2, does NOT attempt reload or health check,
+    and preserves the candidate container.
+    """
+    (mock_env["mock_dir"] / "upstream.conf").write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "upstream.conf.previous").write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "deployment_state.json").write_text(
+        json.dumps({
+            "deployment_id": "commit_test",
+            "previous_slot": "blue",
+            "previous_container": "devsecops-app-blue",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "standby_ready"
+        }),
+        encoding="utf-8", newline="\n"
+    )
+    (mock_env["mock_dir"] / "restore_write_fail").touch()
+
+    res = run_deploy(mock_env, args=["--rollback"])
+    assert res.returncode == 2
+    assert "CRITICAL: Failed to restore backup configuration" in res.stderr
+
+    # Candidate container must not be stopped or removed
+    log_file = mock_env["mock_dir"] / "docker_actions.log"
+    actions = log_file.read_text(encoding="utf-8").splitlines() if log_file.exists() else []
+    assert not any("devsecops-app-green" in a for a in actions), f"devsecops-app-green was targeted: {actions}"
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 58: Deployment ID extraction for tagged immutable, ordinary tagged, and digest-only references
+# ------------------------------------------------------------------------------
+def test_deployment_id_extraction_matrix(mock_env):
+    """
+    Tests deployment ID extraction across:
+    1. Tagged immutable reference: app:commit_123@sha256:<hash> -> commit_123
+    2. Ordinary tagged reference: app:commit_456 -> commit_456
+    3. Fully-qualified ECR tagged immutable reference -> commit_789
+    4. Malformed/untagged reference -> rejected by immutable validator
+    """
+    import subprocess
+    digest = "ba018c08cfb1eab89293eee28d92b24b90e801d7994a8df33798cfd5a7fa7cec"
+
+    # Helper to test Bash extraction logic directly from deploy_blue_green.sh
+    def extract_dep_id(image_str, extra_env=None):
+        cmd = [BASH_BIN, "scripts/deploy_blue_green.sh", "--extract-deployment-id", image_str]
+        full_env = {**os.environ, **(extra_env or {})}
+        r = subprocess.run(cmd, capture_output=True, text=True, env=full_env)
+        assert r.returncode == 0, f"Bash failed with code {r.returncode}: {r.stderr}"
+        return r.stdout.strip()
+
+    # 1. Tagged immutable
+    assert extract_dep_id(f"test-repo/app:commit_safe123@sha256:{digest}") == "commit_safe123"
+    assert extract_dep_id(f"123456789012.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:caaf7ef5@sha256:{digest}") == "caaf7ef5"
+    assert extract_dep_id(f"localhost:5000/app:v2.1.0@sha256:{digest}") == "v2.1.0"
+
+    # 2. Ordinary tagged reference
+    assert extract_dep_id("test-repo/app:commit_safe456") == "commit_safe456"
+    assert extract_dep_id("localhost:5000/app:release-99") == "release-99"
+
+    # 3. Environment override precedence
+    assert extract_dep_id(f"test-repo/app:commit_safe123@sha256:{digest}", {"DEPLOYMENT_ID": "override_id"}) == "override_id"
+    assert extract_dep_id(f"test-repo/app:commit_safe123@sha256:{digest}", {"GITHUB_SHA": "git_sha_abc"}) == "git_sha_abc"
+
+    # 4. Digest-only reference
+    assert extract_dep_id(f"test-repo/app@sha256:{digest}") == digest
+
+    # 5. Full deploy execution records correct deployment_id in state
+    res = run_deploy(mock_env, f"test-repo/app:feature_xyz@sha256:{digest}")
+    assert res.returncode == 0
+    state_file = mock_env["mock_dir"] / "deployment_state.json"
+    assert state_file.exists()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["deployment_id"] == "feature_xyz"
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 59: Ordinary mutable reference rejected by deployment script validation
+# ------------------------------------------------------------------------------
+def test_ordinary_mutable_reference_rejected_by_immutable_validator(mock_env):
+    """
+    Confirms that while DEPLOYMENT_ID can be parsed from an ordinary tagged reference,
+    deploy_blue_green.sh strictly enforces immutable digest requirement and rejects mutable tags.
+    """
+    res = run_deploy(mock_env, "test-repo/app:commit_safe123", allow_raw_image=True)
+    assert res.returncode == 1
+    assert "Deployment rejected: DEPLOY_IMAGE must reference an immutable digest" in res.stderr

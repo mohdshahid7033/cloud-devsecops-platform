@@ -1312,7 +1312,7 @@ jobs:
                 "if [ -z \"$DIRECTIVES\" ]; then echo \"ERROR: No directives found in app_backend upstream block!\" >&2; exit 1; fi",
                 "DIRECTIVE_COUNT=$(echo \"$DIRECTIVES\" | wc -l)",
                 "if [ \"$DIRECTIVE_COUNT\" -ne 1 ]; then echo \"ERROR: Expected exactly 1 directive in app_backend upstream, found $DIRECTIVE_COUNT:\" >&2; echo \"$DIRECTIVES\" >&2; exit 1; fi",
-                "if ! echo \"$DIRECTIVES\" | grep -E -q \"^server[[:space:]]+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$\"; then echo \"ERROR: Directive does not match exact supported syntax 'server <authorized-host>:5000' with no trailing parameters: '$DIRECTIVES'\" >&2; exit 1; fi",
+                "if ! echo \"$DIRECTIVES\" | grep -E -q \"^server[[:space:]]+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$\"; then echo \"ERROR: Directive does not match exact supported syntax server HOST:5000 with no trailing parameters: $DIRECTIVES\" >&2; exit 1; fi",
                 "ACTIVE_CONT=$(echo \"$DIRECTIVES\" | sed -e \"s/^server[[:space:]]\\+//\" | cut -d: -f1)",
                 "echo \"Authoritatively verified active production container from running Nginx: $ACTIVE_CONT\"",
                 "if ! docker ps --filter \"name=^/${ACTIVE_CONT}$\" --filter \"status=running\" --format \"{{.Names}}\" | grep -q \"^${ACTIVE_CONT}$\"; then echo \"ERROR: Active container \\\"$ACTIVE_CONT\\\" is not running in Docker!\" >&2; exit 1; fi",

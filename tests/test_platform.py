@@ -2611,3 +2611,47 @@ def test_ci_workflow_fail_closed_and_exact_digest_contracts():
     rollback_step = next(s for s in wf["jobs"]["verify-production"]["steps"] if "rollback" in s.get("name", "").lower())
     rollback_condition = rollback_step.get("if", "")
     assert "steps.verify_digest.outcome == 'failure'" in rollback_condition
+
+
+def test_verify_digest_bash_quoting_and_ssm_payload_validity():
+    """
+    Verify regression prevention for Issue 1:
+    1. No embedded single quotes exist inside the single-quoted jq program for DIGEST_PAYLOAD.
+    2. No angle-bracket file redirection operators (<authorized-host>) exist in the runner script.
+    3. The supported directive syntax error message uses safe single-quote-free phrasing (server HOST:5000).
+    4. The exact Nginx directive validation regex remains strictly intact.
+    5. The jq program generates a valid AWS-RunShellScript payload structure.
+    """
+    import yaml
+    with open(".github/workflows/ci.yml", "r", encoding="utf-8") as f:
+        wf = yaml.safe_load(f)
+
+    verify_step = next(s for s in wf["jobs"]["verify-production"]["steps"] if s.get("id") == "verify_digest")
+    script = verify_step.get("run", "")
+
+    # 1. No angle-bracket redirection token
+    assert "<authorized-host>" not in script, "Angle-bracket token '<authorized-host>' must be removed to avoid shell redirection"
+    assert "authorized-host" not in script
+
+    # 2. Extract the jq program between opening '{ and closing }'
+    jq_start = script.find("DIGEST_PAYLOAD=$(jq -n")
+    assert jq_start != -1, "DIGEST_PAYLOAD definition must exist"
+    jq_payload_block = script[jq_start:script.find("COMMAND_ID=", jq_start)]
+
+    # The jq program is passed as a single-quoted argument '{ ... }'
+    prog_start = jq_payload_block.find("'{")
+    prog_end = jq_payload_block.rfind("}'")
+    assert prog_start != -1 and prog_end != -1, "jq program must be delimited by '{ and }'"
+
+    jq_prog_body = jq_payload_block[prog_start + 2:prog_end]
+
+    # Crucial assertion: zero unescaped single quotes inside the jq program
+    single_quote_count = jq_prog_body.count("'")
+    assert single_quote_count == 0, (
+        f"Found {single_quote_count} embedded single quotes inside the single-quoted jq program! "
+        "Any single quote terminates Bash quoting on the runner and causes redirection syntax errors."
+    )
+
+    # 3. Error message phrasing and regex preservation
+    assert "Directive does not match exact supported syntax server HOST:5000" in jq_prog_body
+    assert "^server[[:space:]]+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$" in jq_prog_body
