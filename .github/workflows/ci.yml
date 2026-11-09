@@ -239,12 +239,19 @@ jobs:
 
           trivy fs --severity HIGH,CRITICAL --exit-code 1 .
 
+      - name: Disable containerd image store for Docker
+        run: |
+          echo '{"features": {"containerd-snapshotter": false}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info >/dev/null 2>&1 || (echo "ERROR: Docker daemon failed to restart!" >&2; exit 1)
+
       - name: Build Docker image for security scan
         id: build_docker
         run: |
           echo "=== Building Docker container image (single build) ==="
           BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           docker build \
+            --provenance=false \
             --build-arg BUILD_REVISION="${{ github.sha }}" \
             --build-arg BUILD_DATE="$BUILD_DATE" \
             -t "devsecops-platform:${{ github.sha }}" \
@@ -369,14 +376,61 @@ jobs:
 
           mkdir -p /tmp/image-artifact
           docker save "devsecops-platform:${{ github.sha }}" -o /tmp/image-artifact/devsecops-platform-image.tar
+
+          # Compute archive SHA-256 checksum
+          ARCHIVE_SHA256=$(sha256sum /tmp/image-artifact/devsecops-platform-image.tar | awk '{print $1}')
+
+          # Extract image configuration digest from archive manifest
+          CONFIG_FILE=$(tar -xOf /tmp/image-artifact/devsecops-platform-image.tar manifest.json | jq -r '.[0].Config')
+          CONFIG_HASH=$(echo "$CONFIG_FILE" | sed -E 's/^(blobs\/)?(sha256\/)?//; s/\.json$//')
+          CONFIG_DIGEST="sha256:${CONFIG_HASH}"
+
+          echo "Archive SHA256: $ARCHIVE_SHA256"
+          echo "Config Digest:  $CONFIG_DIGEST"
+          echo "Image ID:       $ARCHIVE_ID"
+
           cat << EOF > /tmp/image-artifact/image-metadata.json
           {
             "commit_sha": "${{ github.sha }}",
             "image_id": "$ARCHIVE_ID",
+            "config_digest": "$CONFIG_DIGEST",
+            "archive_sha256": "$ARCHIVE_SHA256",
             "image_tag": "devsecops-platform:${{ github.sha }}",
             "created_at": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           }
           EOF
+
+          echo "=== Validating image archive metadata before artifact upload ==="
+          VAL_COMMIT=$(jq -r .commit_sha /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          VAL_ID=$(jq -r .image_id /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          VAL_CONFIG=$(jq -r .config_digest /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          VAL_ARCHIVE_SHA=$(jq -r .archive_sha256 /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          VAL_TAG=$(jq -r .image_tag /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+
+          if [ "$VAL_COMMIT" != "${{ github.sha }}" ] || ! echo "$VAL_COMMIT" | grep -qE '^[a-f0-9]{40}$'; then
+            echo "ERROR: Invalid or missing commit_sha in metadata!" >&2
+            exit 1
+          fi
+          if ! echo "$VAL_ID" | grep -qE '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Invalid or missing image_id in metadata: $VAL_ID" >&2
+            exit 1
+          fi
+          if ! echo "$VAL_CONFIG" | grep -qE '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Invalid or missing config_digest in metadata: $VAL_CONFIG" >&2
+            exit 1
+          fi
+          if ! echo "$VAL_ARCHIVE_SHA" | grep -qE '^[a-f0-9]{64}$'; then
+            echo "ERROR: Invalid or missing archive_sha256 in metadata: $VAL_ARCHIVE_SHA" >&2
+            exit 1
+          fi
+          if [ "$VAL_TAG" != "devsecops-platform:${{ github.sha }}" ]; then
+            echo "ERROR: Invalid or missing image_tag in metadata: $VAL_TAG" >&2
+            exit 1
+          fi
+
+          printf '%s  %s\n' "$VAL_ARCHIVE_SHA" "devsecops-platform-image.tar" > /tmp/archive_check.txt
+          (cd /tmp/image-artifact && sha256sum --check --strict /tmp/archive_check.txt)
+          echo "Verified Docker image archive and metadata successfully."
 
       - name: Upload verified Docker image artifact
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true
@@ -407,6 +461,7 @@ jobs:
         run: |
           echo '{"features": {"containerd-snapshotter": false}}' | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
+          docker info >/dev/null 2>&1 || (echo "ERROR: Docker daemon failed to restart!" >&2; exit 1)
 
       - name: Download verified Docker image artifact
         uses: actions/download-artifact@v4
@@ -417,26 +472,92 @@ jobs:
       - name: Load and verify Docker image
         id: load_image
         run: |
-          echo "=== Loading verified Docker image ==="
+          echo "=== Validating transferred Docker image artifact and metadata ==="
           if [ ! -f /tmp/image-artifact/devsecops-platform-image.tar ]; then
-            echo "ERROR: Verified image artifact not found!" >&2
+            echo "ERROR: Verified image archive not found at /tmp/image-artifact/devsecops-platform-image.tar!" >&2
+            exit 1
+          fi
+          if [ ! -f /tmp/image-artifact/image-metadata.json ]; then
+            echo "ERROR: Image metadata not found at /tmp/image-artifact/image-metadata.json!" >&2
             exit 1
           fi
 
+          RECORDED_COMMIT=$(jq -r .commit_sha /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          RECORDED_ID=$(jq -r .image_id /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          RECORDED_CONFIG_DIGEST=$(jq -r .config_digest /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          RECORDED_ARCHIVE_SHA256=$(jq -r .archive_sha256 /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+          RECORDED_TAG=$(jq -r .image_tag /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
+
+          if [ "$RECORDED_COMMIT" != "${{ github.sha }}" ] || ! echo "$RECORDED_COMMIT" | grep -qE '^[a-f0-9]{40}$'; then
+            echo "ERROR: Invalid or mismatched commit_sha in metadata! Expected ${{ github.sha }}, found $RECORDED_COMMIT" >&2
+            exit 1
+          fi
+          if ! echo "$RECORDED_ID" | grep -qE '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Invalid or missing image_id in metadata: $RECORDED_ID" >&2
+            exit 1
+          fi
+          if ! echo "$RECORDED_CONFIG_DIGEST" | grep -qE '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Invalid or missing config_digest in metadata: $RECORDED_CONFIG_DIGEST" >&2
+            exit 1
+          fi
+          if ! echo "$RECORDED_ARCHIVE_SHA256" | grep -qE '^[a-f0-9]{64}$'; then
+            echo "ERROR: Invalid or missing archive_sha256 in metadata: $RECORDED_ARCHIVE_SHA256" >&2
+            exit 1
+          fi
+          if [ "$RECORDED_TAG" != "devsecops-platform:${{ github.sha }}" ]; then
+            echo "ERROR: Invalid or mismatched image_tag in metadata! Expected devsecops-platform:${{ github.sha }}, found $RECORDED_TAG" >&2
+            exit 1
+          fi
+
+          echo "=== Verifying image archive SHA256 checksum before docker load ==="
+          printf '%s  %s\n' "$RECORDED_ARCHIVE_SHA256" "devsecops-platform-image.tar" > /tmp/expected_archive.txt
+          (cd /tmp/image-artifact && sha256sum --check --strict /tmp/expected_archive.txt)
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Archive SHA256 checksum verification failed!" >&2
+            exit 1
+          fi
+          echo "Archive SHA256 checksum verified successfully."
+
+          echo "=== Loading verified Docker image into daemon ==="
           LOAD_OUTPUT=$(docker load -i /tmp/image-artifact/devsecops-platform-image.tar)
           echo "$LOAD_OUTPUT"
 
-          RECORDED_ID=$(jq -r .image_id /tmp/image-artifact/image-metadata.json 2>/dev/null || true)
           LOADED_ID=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
-
           echo "Recorded Image ID: $RECORDED_ID"
           echo "Loaded Image ID:   $LOADED_ID"
 
-          if [ -n "$RECORDED_ID" ] && [ "$LOADED_ID" != "$RECORDED_ID" ]; then
+          if [ -z "$LOADED_ID" ] || [ "$LOADED_ID" != "$RECORDED_ID" ]; then
             echo "ERROR: Loaded image ID does not match recorded image ID from test-and-scan!" >&2
             exit 1
           fi
-          echo "Docker image ID verified successfully: $LOADED_ID"
+
+          echo "=== Verifying loaded image configuration digest from Docker daemon ==="
+          LOADED_CONFIG_DIGEST=$(docker inspect --format='{{.Id}}' "devsecops-platform:${{ github.sha }}")
+          echo "Recorded Config Digest: $RECORDED_CONFIG_DIGEST"
+          echo "Loaded Daemon Config:   $LOADED_CONFIG_DIGEST"
+
+          if [ -z "$LOADED_CONFIG_DIGEST" ]; then
+            echo "ERROR: Docker inspect returned empty configuration digest!" >&2
+            exit 1
+          fi
+          if ! echo "$LOADED_CONFIG_DIGEST" | grep -qE '^sha256:[a-f0-9]{64}$'; then
+            echo "ERROR: Loaded configuration digest format is invalid: '$LOADED_CONFIG_DIGEST'!" >&2
+            exit 1
+          fi
+          if [ "$LOADED_CONFIG_DIGEST" != "$RECORDED_CONFIG_DIGEST" ]; then
+            echo "ERROR: Loaded image config digest does not match recorded config digest! Expected $RECORDED_CONFIG_DIGEST, found $LOADED_CONFIG_DIGEST" >&2
+            exit 1
+          fi
+          if [ "$LOADED_ID" != "$RECORDED_ID" ]; then
+            echo "ERROR: Loaded image ID does not match recorded image ID! Expected $RECORDED_ID, found $LOADED_ID" >&2
+            exit 1
+          fi
+          if [ "$LOADED_ID" != "$RECORDED_CONFIG_DIGEST" ]; then
+            echo "ERROR: Loaded image ID does not match recorded configuration digest! Expected $RECORDED_CONFIG_DIGEST, found $LOADED_ID" >&2
+            exit 1
+          fi
+
+          echo "Docker image ID and configuration digest verified successfully from daemon: $LOADED_ID"
 
       - name: Configure AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1

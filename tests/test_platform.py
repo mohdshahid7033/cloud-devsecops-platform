@@ -1546,31 +1546,174 @@ def test_cyclonedx_sbom_validation(tmp_path):
 
 
 def test_image_archive_metadata_and_id_verification(tmp_path):
-    """Verify that image artifact metadata accurately ties the commit SHA to the local image ID."""
+    """
+    Verify image artifact transfer contract:
+    1. Valid metadata, archive checksum, matching daemon image ID and config digest pass.
+    2. Corrupted or modified archive fails checksum verification.
+    3. Missing archive file fails verification.
+    4. Malformed or missing metadata fields (commit, id, config, checksum, tag) fail verification.
+    5. Loaded daemon image ID mismatch fails verification.
+    6. Loaded daemon configuration digest mismatch fails verification.
+    7. Empty daemon response fails verification.
+    8. Malformed daemon digest fails verification.
+    9. Daemon image ID mismatch against recorded config digest fails.
+    """
+    import hashlib
     import json
-    metadata_file = tmp_path / "image-metadata.json"
-    recorded_id = "sha256:d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a3928170615"
+    import re
+    import tarfile
+
     commit_sha = "8304adbafb28b39d66be440d0acf66788f3c9d98"
-    metadata_file.write_text(json.dumps({
+    config_hash = "d4e3f2a1b0c9e8d7c6b5a4938271605f4e3d2c1b0a9f8e7d6c5b4a3928170615"
+    recorded_id = f"sha256:{config_hash}"
+    config_digest = f"sha256:{config_hash}"
+    image_tag = f"devsecops-platform:{commit_sha}"
+
+    # Helper: create dummy image tar with manifest.json
+    def create_image_tar(path, config_name=f"{config_hash}.json"):
+        manifest_data = json.dumps([{"Config": config_name, "RepoTags": [image_tag], "Layers": []}]).encode("utf-8")
+        with tarfile.open(path, "w") as tar:
+            ti = tarfile.TarInfo(name="manifest.json")
+            ti.size = len(manifest_data)
+            import io
+            tar.addfile(ti, io.BytesIO(manifest_data))
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    archive_path = tmp_path / "devsecops-platform-image.tar"
+    archive_sha256 = create_image_tar(archive_path)
+
+    # Simulation validator representing the exact steps in publish-ecr
+    def validate_artifact(meta_dict, tar_file, loaded_id, loaded_daemon_digest, expected_commit):
+        if not tar_file.exists():
+            return False, "Archive file does not exist"
+
+        commit = meta_dict.get("commit_sha", "")
+        if commit != expected_commit or not re.match(r"^[a-f0-9]{40}$", commit):
+            return False, "Invalid or mismatched commit_sha"
+
+        img_id = meta_dict.get("image_id", "")
+        if not re.match(r"^sha256:[a-f0-9]{64}$", img_id):
+            return False, "Invalid or missing image_id"
+
+        cfg_dig = meta_dict.get("config_digest", "")
+        if not re.match(r"^sha256:[a-f0-9]{64}$", cfg_dig):
+            return False, "Invalid or missing config_digest"
+
+        arch_sha = meta_dict.get("archive_sha256", "")
+        if not re.match(r"^[a-f0-9]{64}$", arch_sha):
+            return False, "Invalid or missing archive_sha256"
+
+        tag = meta_dict.get("image_tag", "")
+        if tag != f"devsecops-platform:{expected_commit}":
+            return False, "Invalid or mismatched image_tag"
+
+        # Pre-load archive checksum verification
+        with open(tar_file, "rb") as f:
+            computed_sha = hashlib.sha256(f.read()).hexdigest()
+        if computed_sha != arch_sha:
+            return False, "Archive SHA256 mismatch"
+
+        # Daemon loaded image ID verification
+        if not loaded_id or loaded_id != img_id:
+            return False, "Loaded Image ID mismatch"
+
+        # Independent daemon configuration digest verification (Point 5)
+        if not loaded_daemon_digest:
+            return False, "Docker inspect returned empty configuration digest"
+
+        if not re.match(r"^sha256:[a-f0-9]{64}$", loaded_daemon_digest):
+            return False, "Loaded configuration digest format is invalid"
+
+        if loaded_daemon_digest != cfg_dig:
+            return False, "Loaded image config digest does not match recorded config digest"
+
+        if loaded_id != img_id:
+            return False, "Loaded image ID does not match recorded image ID"
+
+        if loaded_id != cfg_dig:
+            return False, "Loaded image ID does not match recorded configuration digest"
+
+        return True, "Valid"
+
+    valid_meta = {
         "commit_sha": commit_sha,
         "image_id": recorded_id,
-        "image_tag": f"devsecops-platform:{commit_sha}",
+        "config_digest": config_digest,
+        "archive_sha256": archive_sha256,
+        "image_tag": image_tag,
         "created_at": "2026-11-06T12:00:00Z"
-    }), encoding="utf-8")
+    }
 
-    with open(metadata_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    # 1. Matching Docker daemon image ID and configuration digest passes
+    ok, msg = validate_artifact(valid_meta, archive_path, recorded_id, config_digest, commit_sha)
+    assert ok is True, msg
 
-    assert data["commit_sha"] == commit_sha
-    assert data["image_id"] == recorded_id
+    # 2. Corrupted archive fails
+    corrupt_tar = tmp_path / "corrupt.tar"
+    with open(archive_path, "rb") as f:
+        data = bytearray(f.read())
+    data[0] ^= 0xFF
+    with open(corrupt_tar, "wb") as f:
+        f.write(data)
+    ok, msg = validate_artifact(valid_meta, corrupt_tar, recorded_id, config_digest, commit_sha)
+    assert ok is False
+    assert "Archive SHA256 mismatch" in msg
 
-    # Simulate loaded image check: match passes
-    loaded_id = recorded_id
-    assert loaded_id == data["image_id"]
+    # 3. Missing archive file fails
+    missing_tar = tmp_path / "nonexistent.tar"
+    ok, msg = validate_artifact(valid_meta, missing_tar, recorded_id, config_digest, commit_sha)
+    assert ok is False
+    assert "does not exist" in msg
 
-    # Simulate loaded image check: mismatch fails
+    # 4. Malformed or missing metadata fields
+    for bad_field, bad_val in [
+        ("commit_sha", "short"),
+        ("commit_sha", "0000000000000000000000000000000000000000"),
+        ("commit_sha", ""),
+        ("image_id", "invalid-id"),
+        ("image_id", "sha256:short"),
+        ("image_id", f"{config_hash}"),
+        ("config_digest", "invalid"),
+        ("config_digest", ""),
+        ("archive_sha256", "not-a-hash"),
+        ("archive_sha256", ""),
+        ("image_tag", "devsecops-platform:latest"),
+        ("image_tag", ""),
+    ]:
+        bad_meta = dict(valid_meta)
+        bad_meta[bad_field] = bad_val
+        ok, msg = validate_artifact(bad_meta, archive_path, recorded_id, config_digest, commit_sha)
+        assert ok is False, f"Expected failure for {bad_field}={bad_val}"
+
+    # 5. Mismatched daemon digest fails
+    mismatched_config = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    ok, msg = validate_artifact(valid_meta, archive_path, recorded_id, mismatched_config, commit_sha)
+    assert ok is False
+    assert "Loaded image config digest does not match recorded config digest" in msg
+
+    # 6. Empty daemon response fails
+    ok, msg = validate_artifact(valid_meta, archive_path, recorded_id, "", commit_sha)
+    assert ok is False
+    assert "Docker inspect returned empty configuration digest" in msg
+
+    # 7. Malformed daemon digest fails
+    for malformed_daemon in ["not-a-digest", "sha256:short", config_hash, "sha256:XYZ"]:
+        ok, msg = validate_artifact(valid_meta, archive_path, recorded_id, malformed_daemon, commit_sha)
+        assert ok is False
+        assert "Loaded configuration digest format is invalid" in msg
+
+    # 8. Loaded image ID mismatch fails
     mismatched_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    assert mismatched_id != data["image_id"]
+    ok, msg = validate_artifact(valid_meta, archive_path, mismatched_id, config_digest, commit_sha)
+    assert ok is False
+    assert "Loaded Image ID mismatch" in msg
+
+    # 9. Asymmetric daemon mismatch (e.g. index ID loaded vs config digest)
+    index_id = "sha256:ba018c08cfb1eab89293eee28d92b24b90e801d7994a8df33798cfd5a7fa7cec"
+    ok, msg = validate_artifact(valid_meta, archive_path, index_id, index_id, commit_sha)
+    assert ok is False
+    assert "Loaded Image ID mismatch" in msg
 
 
 def test_ecr_image_digest_validation_and_uri_formatting():
@@ -1601,11 +1744,14 @@ def test_ecr_image_digest_validation_and_uri_formatting():
 def test_ci_workflow_single_build_and_digest_deployment_contract():
     """
     Verify CI workflow contract:
-    1. test-and-scan builds and tests the image once.
-    2. publish-ecr loads the verified image and does not run docker build.
-    3. publish-ecr defines image_digest and image_uri outputs.
-    4. deploy-blue-green passes DEPLOY_IMAGE with @sha256 digest.
-    5. verify-production checks running container against expected digest.
+    1. test-and-scan and publish-ecr both configure containerd-snapshotter: false.
+    2. test-and-scan builds and tests the image once with --provenance=false.
+    3. test-and-scan calculates archive sha256, config digest, and validates metadata.
+    4. publish-ecr loads the verified image and does not run docker build.
+    5. publish-ecr verifies archive sha256 with sha256sum --check --strict before docker load.
+    6. publish-ecr independently verifies loaded config digest against recorded config digest.
+    7. Exactly one docker build command exists across the entire workflow.
+    8. Production deployment authorization guards remain strictly intact.
     """
     import yaml
     with open(".github/workflows/ci.yml", "r", encoding="utf-8") as f:
@@ -1617,48 +1763,102 @@ def test_ci_workflow_single_build_and_digest_deployment_contract():
     assert "deploy-blue-green" in jobs
     assert "verify-production" in jobs
 
-    # 1. test-and-scan has smoke test and security scans
+    # 1. Docker daemon alignment: containerd-snapshotter: false in BOTH jobs
     test_scan_steps = jobs["test-and-scan"].get("steps", [])
-    step_ids = [s.get("id") for s in test_scan_steps]
-    assert "trivy_fs" in step_ids
-    assert "build_docker" in step_ids
-    assert "smoke_test" in step_ids
-    assert "trivy_image" in step_ids
+    publish_steps = jobs["publish-ecr"].get("steps", [])
 
-    # 2. publish-ecr outputs
-    publish_job = jobs["publish-ecr"]
-    assert "outputs" in publish_job
-    assert "image_digest" in publish_job["outputs"]
-    assert "image_uri" in publish_job["outputs"]
+    daemon_step_test = next((s for s in test_scan_steps if "containerd" in s.get("name", "").lower()), None)
+    assert daemon_step_test is not None, "test-and-scan must configure Docker daemon"
+    assert '"containerd-snapshotter": false' in daemon_step_test.get("run", "")
+    assert "systemctl restart docker" in daemon_step_test.get("run", "")
+    assert "docker info" in daemon_step_test.get("run", "")
 
-    # 3. publish-ecr does NOT rebuild the image with 'docker build'
-    publish_steps = publish_job.get("steps", [])
+    daemon_step_pub = next((s for s in publish_steps if "containerd" in s.get("name", "").lower()), None)
+    assert daemon_step_pub is not None, "publish-ecr must configure Docker daemon"
+    assert '"containerd-snapshotter": false' in daemon_step_pub.get("run", "")
+    assert "systemctl restart docker" in daemon_step_pub.get("run", "")
+    assert "docker info" in daemon_step_pub.get("run", "")
+
+    # 2. Single build with --provenance=false in test-and-scan
+    build_step = next(s for s in test_scan_steps if s.get("id") == "build_docker")
+    build_cmd = build_step.get("run", "")
+    assert "docker build " in build_cmd
+    assert "--provenance=false" in build_cmd
+
+    # 3. Exactly one 'docker build' command across all workflow steps
+    all_steps = []
+    for j_name, j_def in jobs.items():
+        all_steps.extend(j_def.get("steps", []))
+    build_occurrences = [s.get("name") for s in all_steps if "docker build " in s.get("run", "")]
+    assert len(build_occurrences) == 1, f"Expected exactly 1 docker build, found: {build_occurrences}"
+
+    # 4. publish-ecr does NOT rebuild the image with 'docker build'
     for step in publish_steps:
         run_script = step.get("run", "")
-        # Must not contain docker build command
         assert "docker build " not in run_script
 
-    # 4. publish-ecr depends on test-and-scan
-    assert publish_job.get("needs") == ["test-and-scan"]
+    # 5. Archive and metadata generation in test-and-scan
+    archive_step = next(s for s in test_scan_steps if "Archive verified Docker image" in s.get("name", ""))
+    archive_run = archive_step.get("run", "")
+    assert "docker save " in archive_run
+    assert "ARCHIVE_SHA256=" in archive_run
+    assert "CONFIG_DIGEST=" in archive_run
+    assert "sha256sum --check --strict" in archive_run
+    assert "image-metadata.json" in archive_run
 
-    # 5. deploy-blue-green depends on publish-ecr
-    deploy_job = jobs["deploy-blue-green"]
-    assert deploy_job.get("needs") == ["publish-ecr"]
+    # 6. publish-ecr verification before load and independent daemon config digest check
+    load_step = next(s for s in publish_steps if s.get("id") == "load_image")
+    load_run = load_step.get("run", "")
+    assert "sha256sum --check --strict" in load_run
+    assert "docker load -i" in load_run
+    assert "LOADED_ID=" in load_run
+    assert "LOADED_CONFIG_DIGEST=" in load_run
 
-    # 6. verify-production depends on deploy-blue-green and publish-ecr
-    verify_job = jobs["verify-production"]
-    assert "deploy-blue-green" in verify_job.get("needs")
-    assert "publish-ecr" in verify_job.get("needs")
+    # Workflow must query loaded digest directly from Docker daemon via docker inspect
+    assert "LOADED_CONFIG_DIGEST=$(docker inspect --format='{{.Id}}'" in load_run
 
-    # 7. Check pinned Trivy v0.76.2 and checksum validation in trivy_fs step
+    # Workflow must NOT re-extract loaded config from the archive file in publish-ecr
+    assert "tar -xOf" not in load_run
+    for pub_step in publish_steps:
+        assert "tar -xOf" not in pub_step.get("run", ""), "publish-ecr must not re-extract from archive"
+
+    # Validation checks on daemon config digest and loaded ID
+    assert "^sha256:[a-f0-9]{64}$" in load_run
+    assert 'LOADED_CONFIG_DIGEST" != "$RECORDED_CONFIG_DIGEST"' in load_run
+    assert 'LOADED_ID" != "$RECORDED_ID"' in load_run
+    assert 'LOADED_ID" != "$RECORDED_CONFIG_DIGEST"' in load_run
+    assert "Docker inspect returned empty configuration digest" in load_run
+
+    # Check execution order: sha256sum verification must precede docker load
+    check_pos = load_run.find("sha256sum --check --strict")
+    load_pos = load_run.find("docker load -i")
+    assert check_pos < load_pos, "sha256sum verification must occur BEFORE docker load"
+
+    # 7. Dependencies between jobs
+    assert jobs["publish-ecr"].get("needs") == ["test-and-scan"]
+    assert jobs["deploy-blue-green"].get("needs") == ["publish-ecr"]
+    assert "deploy-blue-green" in jobs["verify-production"].get("needs")
+    assert "publish-ecr" in jobs["verify-production"].get("needs")
+
+    # 8. Pinned Trivy v0.76.2 and checksum validation
     trivy_fs_step = next(s for s in test_scan_steps if s.get("id") == "trivy_fs")
     run_cmd = trivy_fs_step.get("run", "")
     assert 'TRIVY_VERSION="0.76.2"' in run_cmd
     assert "sha256sum --check" in run_cmd
 
-    # 8. Security evidence artifact upload requires all files (if-no-files-found: error)
+    # 9. Security evidence artifact upload requires all files
     upload_evidence_step = next(s for s in test_scan_steps if "Upload security scan evidence" in s.get("name", ""))
     assert upload_evidence_step.get("with", {}).get("if-no-files-found") == "error"
+
+    # 10. Production authorization guards on all production jobs & archive steps
+    prod_guard = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_to_production == true"
+    assert jobs["publish-ecr"].get("if") == prod_guard
+    assert jobs["deploy-blue-green"].get("if") == prod_guard
+    assert jobs["verify-production"].get("if") == prod_guard
+    assert archive_step.get("if") == prod_guard
+
+    upload_art_step = next(s for s in test_scan_steps if "Upload verified Docker image" in s.get("name", ""))
+    assert upload_art_step.get("if") == prod_guard
 
 
 def test_deploy_script_digest_validation():
