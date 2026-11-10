@@ -734,8 +734,82 @@ jobs:
           # Inspect running Nginx configuration to discover the active route without green-first bias
           CURRENT_ROUTE=""
           if [ "$NGINX_RUNNING" = true ]; then
-              NGINX_DUMP=$(docker exec devsecops-nginx nginx -T 2>/dev/null || docker exec devsecops-nginx cat /etc/nginx/nginx.conf 2>/dev/null || true)
-              CLEAN_DUMP=$(echo "$NGINX_DUMP" | sed -e 's/#.*//')
+              DISCOVERY_SOURCE=""
+              RAW_CONF=""
+
+              # 1. Attempt to read /etc/nginx/conf.d/upstream.conf directly from the running container
+              if docker exec devsecops-nginx test -s /etc/nginx/conf.d/upstream.conf 2>/dev/null; then
+                  RAW_CONF=$(docker exec devsecops-nginx cat /etc/nginx/conf.d/upstream.conf 2>/dev/null || true)
+                  if [ -n "$(echo "$RAW_CONF" | tr -d '[:space:]')" ]; then
+                      DISCOVERY_SOURCE="container /etc/nginx/conf.d/upstream.conf"
+                      echo "[INFO] Inspecting active route from $DISCOVERY_SOURCE..."
+                  else
+                      echo "[WARN] Container /etc/nginx/conf.d/upstream.conf is empty."
+                  fi
+              else
+                  echo "[INFO] Container /etc/nginx/conf.d/upstream.conf missing or unavailable."
+              fi
+
+              # 2. If unavailable or empty, attempt to read the host bind-mounted source after verifying provenance
+              if [ -z "$DISCOVERY_SOURCE" ]; then
+                  HOST_UPSTREAM_CANDIDATE="${HOST_UPSTREAM_FILE:-/home/ec2-user/nginx-conf/upstream.conf}"
+                  CONTAINER_UPSTREAM_MOUNT=$(docker inspect devsecops-nginx --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d/upstream.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+                  if [ -s "$HOST_UPSTREAM_CANDIDATE" ]; then
+                      if [ -n "$CONTAINER_UPSTREAM_MOUNT" ] && [ "$CONTAINER_UPSTREAM_MOUNT" = "$HOST_UPSTREAM_CANDIDATE" ]; then
+                          RAW_CONF=$(cat "$HOST_UPSTREAM_CANDIDATE" 2>/dev/null || true)
+                          if [ -n "$(echo "$RAW_CONF" | tr -d '[:space:]')" ]; then
+                              DISCOVERY_SOURCE="host $HOST_UPSTREAM_CANDIDATE (verified mount)"
+                              echo "[INFO] Inspecting active route from $DISCOVERY_SOURCE..."
+                          else
+                              echo "[WARN] Host $HOST_UPSTREAM_CANDIDATE is empty."
+                          fi
+                      else
+                          echo "[WARN] Host $HOST_UPSTREAM_CANDIDATE is not mounted to /etc/nginx/conf.d/upstream.conf in devsecops-nginx (mount source: '${CONTAINER_UPSTREAM_MOUNT:-none}'). Skipping unverified host file."
+                      fi
+                  else
+                      echo "[INFO] Host $HOST_UPSTREAM_CANDIDATE missing or unavailable."
+                  fi
+              fi
+
+              # 3. If still unresolved, execute nginx -T, capturing stdout and stderr without discarding diagnostics
+              if [ -z "$DISCOVERY_SOURCE" ]; then
+                  echo "[INFO] Attempting runtime configuration dump via 'nginx -T'..."
+                  NGINX_T_OUT=""
+                  NGINX_T_RC=0
+                  NGINX_T_OUT=$(docker exec devsecops-nginx nginx -T 2>&1) || NGINX_T_RC=$?
+                  if [ "$NGINX_T_RC" -eq 0 ] && [ -n "$(echo "$NGINX_T_OUT" | tr -d '[:space:]')" ]; then
+                      RAW_CONF="$NGINX_T_OUT"
+                      DISCOVERY_SOURCE="runtime dump (nginx -T)"
+                      echo "[INFO] Inspecting active route from $DISCOVERY_SOURCE (exit code 0)..."
+                  else
+                      echo "[WARN] 'nginx -T' failed with exit status $NGINX_T_RC:"
+                      if [ -n "$NGINX_T_OUT" ]; then
+                          echo "$NGINX_T_OUT" | sed 's/^/  [nginx -T] /'
+                      fi
+                  fi
+              fi
+
+              # 4. Use /etc/nginx/nginx.conf as a final compatibility fallback for legacy inline configurations
+              if [ -z "$DISCOVERY_SOURCE" ]; then
+                  if docker exec devsecops-nginx test -s /etc/nginx/nginx.conf 2>/dev/null; then
+                      RAW_CONF=$(docker exec devsecops-nginx cat /etc/nginx/nginx.conf 2>/dev/null || true)
+                      if [ -n "$(echo "$RAW_CONF" | tr -d '[:space:]')" ]; then
+                          DISCOVERY_SOURCE="container /etc/nginx/nginx.conf"
+                          echo "[INFO] Inspecting active route from fallback $DISCOVERY_SOURCE..."
+                      else
+                          echo "[WARN] Container /etc/nginx/nginx.conf is empty."
+                      fi
+                  else
+                      echo "[INFO] Container /etc/nginx/nginx.conf missing or unavailable."
+                  fi
+              fi
+
+              if [ -z "$DISCOVERY_SOURCE" ] || [ -z "$(echo "$RAW_CONF" | tr -d '[:space:]')" ]; then
+                  echo "CRITICAL: Nginx is running but all configuration discovery sources were missing or empty. Aborting." >&2
+                  exit 1
+              fi
+
+              CLEAN_DUMP=$(echo "$RAW_CONF" | sed -e 's/#.*//')
 
               FOUND_BLUE=false
               FOUND_GREEN=false
@@ -770,6 +844,34 @@ jobs:
                   FOUND_APP=true
               fi
 
+              # Check for unknown backend targets
+              UNKNOWN_TARGETS=false
+              for s_target in $(echo "$CLEAN_DUMP" | grep -E '(^|[[:space:];{}])server[[:space:]]+[a-zA-Z0-9_.-]+(:[0-9]+)?' | awk '{for(i=1;i<=NF;i++) if($i=="server") print $(i+1)}' | sed 's/[:;].*//'); do
+                  case "$s_target" in
+                      devsecops-app-blue|devsecops-app-green|devsecops-app|app)
+                          ;;
+                      *)
+                          echo "[ERROR] Unknown upstream server target detected: '$s_target'" >&2
+                          UNKNOWN_TARGETS=true
+                          ;;
+                  esac
+              done
+              for p_target in $(echo "$CLEAN_DUMP" | grep -E 'proxy_pass[[:space:]]+http://[a-zA-Z0-9_.-]+' | awk '{for(i=1;i<=NF;i++) if($i ~ /^http:\/\//) print $i}' | sed -e 's#^http://##' -e 's/[:;/].*//'); do
+                  case "$p_target" in
+                      devsecops-app-blue|devsecops-app-green|devsecops-app|app|app_backend)
+                          ;;
+                      *)
+                          echo "[ERROR] Unknown proxy_pass target detected: '$p_target'" >&2
+                          UNKNOWN_TARGETS=true
+                          ;;
+                  esac
+              done
+
+              if [ "$UNKNOWN_TARGETS" = true ]; then
+                  echo "CRITICAL: Unknown active backend target detected in Nginx configuration ($DISCOVERY_SOURCE). Aborting." >&2
+                  exit 1
+              fi
+
               DUMP_MATCHES=0
               [ "$FOUND_BLUE" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
               [ "$FOUND_GREEN" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
@@ -777,7 +879,7 @@ jobs:
               [ "$FOUND_APP" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
 
               if [ "$DUMP_MATCHES" -gt 1 ]; then
-                  echo "CRITICAL: Ambiguous active routes detected in Nginx configuration ($DUMP_MATCHES conflicting matches). Aborting."
+                  echo "CRITICAL: Ambiguous active routes detected in Nginx configuration ($DUMP_MATCHES conflicting matches from $DISCOVERY_SOURCE). Aborting." >&2
                   exit 1
               elif [ "$FOUND_BLUE" = true ]; then
                   CURRENT_ROUTE="devsecops-app-blue"
@@ -788,9 +890,25 @@ jobs:
               elif [ "$FOUND_APP" = true ]; then
                   CURRENT_ROUTE="app"
               else
-                  echo "CRITICAL: Nginx is running but active production route could not be unambiguously identified. Aborting."
+                  echo "CRITICAL: Nginx is running but active production route could not be unambiguously identified from $DISCOVERY_SOURCE. Aborting." >&2
                   exit 1
               fi
+
+              # Independent Nginx syntax validation requirement (Requirement 4.C)
+              # Reading upstream.conf successfully does not prove the full Nginx configuration is valid
+              echo "[INFO] Performing independent syntax validation of running Nginx container configuration..."
+              NGINX_SYNTAX_OUT=""
+              NGINX_SYNTAX_RC=0
+              NGINX_SYNTAX_OUT=$(docker exec devsecops-nginx nginx -t 2>&1) || NGINX_SYNTAX_RC=$?
+              if [ "$NGINX_SYNTAX_RC" -ne 0 ]; then
+                  echo "CRITICAL: Running Nginx configuration failed syntax validation (exit code $NGINX_SYNTAX_RC):" >&2
+                  if [ -n "$NGINX_SYNTAX_OUT" ]; then
+                      echo "$NGINX_SYNTAX_OUT" | sed 's/^/  [nginx -t] /' >&2
+                  fi
+                  echo "Aborting deployment because Nginx configuration is invalid." >&2
+                  exit 1
+              fi
+              echo "[INFO] Running Nginx configuration syntax is verified valid."
           fi
 
           # Determine the active upstream target (preserve discovered route, default to blue only on fresh install)

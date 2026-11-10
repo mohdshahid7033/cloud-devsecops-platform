@@ -2655,3 +2655,99 @@ def test_verify_digest_bash_quoting_and_ssm_payload_validity():
     # 3. Error message phrasing and regex preservation
     assert "Directive does not match exact supported syntax server HOST:5000" in jq_prog_body
     assert "^server[[:space:]]+(devsecops-app-blue|devsecops-app-green|devsecops-app):5000$" in jq_prog_body
+
+
+def test_ci_workflow_modular_route_discovery_and_syntax_validation_contract():
+    """
+    Verifies that Section 4 of the CI production deployment script enforces:
+    1. Modular configuration discovery cascade:
+       - Tier 1: Container /etc/nginx/conf.d/upstream.conf
+       - Tier 2: Host /home/ec2-user/nginx-conf/upstream.conf
+       - Tier 3: Runtime dump (nginx -T 2>&1) with diagnostics preserved
+       - Tier 4: Container /etc/nginx/nginx.conf fallback
+    2. Fail-closed rejection of unknown backend targets (both server and proxy_pass).
+    3. Strict single active route verification (ambiguous routes abort fail-closed).
+    4. Independent syntax validation (docker exec devsecops-nginx nginx -t 2>&1)
+       so route discovery from upstream.conf never bypasses syntax verification.
+    5. Clean diagnostics logging for operator visibility.
+    """
+    import yaml
+    with open(".github/workflows/ci.yml", "r", encoding="utf-8") as f:
+        wf = yaml.safe_load(f)
+
+    deploy_step = next(
+        s for s in wf["jobs"]["deploy-blue-green"]["steps"]
+        if s.get("id") == "ssm_deploy"
+    )
+    script = deploy_step.get("run", "")
+
+    # 1. Tier 1: Container modular upstream
+    assert "docker exec devsecops-nginx test -s /etc/nginx/conf.d/upstream.conf" in script
+    assert "docker exec devsecops-nginx cat /etc/nginx/conf.d/upstream.conf" in script
+    assert 'DISCOVERY_SOURCE="container /etc/nginx/conf.d/upstream.conf"' in script
+
+    # 2. Tier 2: Host bind-mounted source with verified provenance
+    assert "/home/ec2-user/nginx-conf/upstream.conf" in script
+    assert "CONTAINER_UPSTREAM_MOUNT" in script
+    assert "Skipping unverified host file" in script
+    assert "(verified mount)" in script
+
+    # 3. Tier 3: Runtime dump (nginx -T 2>&1) with diagnostics preserved
+    assert "docker exec devsecops-nginx nginx -T 2>&1" in script
+    assert "2>/dev/null" not in script[script.find("docker exec devsecops-nginx nginx -T"):script.find("docker exec devsecops-nginx test -s /etc/nginx/nginx.conf")]
+    assert 'DISCOVERY_SOURCE="runtime dump (nginx -T)"' in script
+    assert "[nginx -T]" in script
+
+    # 4. Tier 4: Container root nginx.conf fallback
+    assert "docker exec devsecops-nginx test -s /etc/nginx/nginx.conf" in script
+    assert "docker exec devsecops-nginx cat /etc/nginx/nginx.conf" in script
+    assert 'DISCOVERY_SOURCE="container /etc/nginx/nginx.conf"' in script
+
+    # 5. Fail-closed empty / missing configuration handling
+    assert "all configuration discovery sources were missing or empty. Aborting." in script
+
+    # 6. Unknown backend target rejection
+    assert "UNKNOWN_TARGETS=false" in script
+    assert "Unknown upstream server target detected" in script
+    assert "Unknown proxy_pass target detected" in script
+    assert "CRITICAL: Unknown active backend target detected in Nginx configuration" in script
+
+    # 7. Ambiguity check
+    assert 'DUMP_MATCHES" -gt 1' in script
+    assert "CRITICAL: Ambiguous active routes detected in Nginx configuration" in script
+
+    # 8. Independent syntax validation requirement
+    assert "docker exec devsecops-nginx nginx -t 2>&1" in script
+    assert "Running Nginx configuration failed syntax validation" in script
+    assert "Aborting deployment because Nginx configuration is invalid." in script
+    assert "[nginx -t]" in script
+    assert "Running Nginx configuration syntax is verified valid." in script
+
+
+def test_ci_discovery_extracted_block_anti_drift_contract():
+    """
+    Verifies that the Section 4 discovery block extracted dynamically by the test
+    suite matches the production implementation invariants without divergence:
+    - 4-Tier discovery cascade
+    - Read-only Docker inspect for host mount provenance
+    - Preserved nginx -T diagnostics without 2>/dev/null
+    - Independent nginx -t validation
+    - Unknown target detection fail-closed
+    - Ambiguity detection fail-closed
+    """
+    from tests.test_deploy_blue_green import extract_ci_discovery_script
+    extracted = extract_ci_discovery_script()
+
+    # Invariants in extracted code
+    assert "docker exec devsecops-nginx test -s /etc/nginx/conf.d/upstream.conf" in extracted
+    assert "CONTAINER_UPSTREAM_MOUNT=" in extracted
+    assert "docker inspect devsecops-nginx --format" in extracted
+    assert "Skipping unverified host file." in extracted
+    assert "(verified mount)" in extracted
+    assert "docker exec devsecops-nginx nginx -T 2>&1" in extracted
+    assert "2>/dev/null" not in extracted[extracted.find("nginx -T"):extracted.find("test -s /etc/nginx/nginx.conf")]
+    assert "docker exec devsecops-nginx test -s /etc/nginx/nginx.conf" in extracted
+    assert "UNKNOWN_TARGETS=false" in extracted
+    assert "DUMP_MATCHES" in extracted
+    assert "docker exec devsecops-nginx nginx -t 2>&1" in extracted
+    assert "Running Nginx configuration syntax is verified valid." in extracted

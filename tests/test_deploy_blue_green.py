@@ -832,11 +832,24 @@ def test_ci_nginx_bind_mount_and_stale_config_logic(tmp_path):
 
 
 # ==============================================================================
-# CI SECTION 4 MIGRATION & ROUTE DETECTION REGRESSION TEST SUITE (PHASE 6E)
+# UNIT TEST HARNESS: ISOLATED ROUTE STRING PARSER REGEX LOGIC
+#
+# NOTE: This parser script is maintained strictly as an isolated unit-testing harness
+# for raw regex/string pattern matching (used in Scenarios 29-31 below).
+# It is NOT used as proof of end-to-end production workflow behavior.
+# Production workflow discovery behavior is verified via run_ci_discovery_cascade(),
+# which executes the exact production shell script dynamically extracted directly
+# from .github/workflows/ci.yml (via extract_ci_discovery_script()).
 # ==============================================================================
 
-CI_ROUTE_PARSER_SCRIPT = """
-CLEAN_DUMP="$1"
+CI_ROUTE_PARSER_SCRIPT = r"""
+RAW_CONF="$1"
+CLEAN_DUMP=$(echo "$RAW_CONF" | sed -e 's/#.*//')
+if [ -z "$(echo "$CLEAN_DUMP" | tr -d '[:space:]')" ]; then
+    echo "EMPTY"
+    exit 1
+fi
+
 FOUND_BLUE=false
 FOUND_GREEN=false
 FOUND_DEVSECOPS=false
@@ -870,6 +883,32 @@ if echo "$CLEAN_DUMP" | grep -E -q '(^|[[:space:];{}])proxy_pass[[:space:]]+http
     FOUND_APP=true
 fi
 
+# Check for unknown backend targets
+UNKNOWN_TARGETS=false
+for s_target in $(echo "$CLEAN_DUMP" | grep -E '(^|[[:space:];{}])server[[:space:]]+[a-zA-Z0-9_.-]+(:[0-9]+)?' | awk '{for(i=1;i<=NF;i++) if($i=="server") print $(i+1)}' | sed 's/[:;].*//'); do
+    case "$s_target" in
+        devsecops-app-blue|devsecops-app-green|devsecops-app|app)
+            ;;
+        *)
+            UNKNOWN_TARGETS=true
+            ;;
+    esac
+done
+for p_target in $(echo "$CLEAN_DUMP" | grep -E 'proxy_pass[[:space:]]+http://[a-zA-Z0-9_.-]+' | awk '{for(i=1;i<=NF;i++) if($i ~ /^http:\/\//) print $i}' | sed -e 's#^http://##' -e 's/[:;/].*//'); do
+    case "$p_target" in
+        devsecops-app-blue|devsecops-app-green|devsecops-app|app|app_backend)
+            ;;
+        *)
+            UNKNOWN_TARGETS=true
+            ;;
+    esac
+done
+
+if [ "$UNKNOWN_TARGETS" = true ]; then
+    echo "UNKNOWN_TARGET"
+    exit 1
+fi
+
 DUMP_MATCHES=0
 [ "$FOUND_BLUE" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
 [ "$FOUND_GREEN" = true ] && DUMP_MATCHES=$((DUMP_MATCHES + 1))
@@ -895,12 +934,174 @@ fi
 
 
 def run_ci_parser(clean_dump_text):
+    """
+    Isolated unit test helper: executes the route parser regex patterns on raw strings.
+    For end-to-end production workflow testing, use run_ci_discovery_cascade().
+    """
     proc = subprocess.run(
         [BASH_BIN, "-c", CI_ROUTE_PARSER_SCRIPT, "sh", clean_dump_text],
         capture_output=True,
         text=True
     )
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def extract_ci_discovery_script():
+    """
+    Extracts the exact production Nginx discovery and syntax validation shell block
+    directly from .github/workflows/ci.yml to ensure 100% implementation equivalence
+    and prevent test harness drift.
+    """
+    import yaml
+    with open(".github/workflows/ci.yml", "r", encoding="utf-8") as f:
+        wf = yaml.safe_load(f)
+    deploy_step = next(s for s in wf["jobs"]["deploy-blue-green"]["steps"] if s.get("id") == "ssm_deploy")
+    script = deploy_step["run"]
+    lines = script.splitlines()
+
+    start_idx = next(i for i, l in enumerate(lines) if "Inspect running Nginx configuration to discover the active route" in l)
+    end_idx = next(i for i, l in enumerate(lines) if "Determine the active upstream target" in l)
+    return "\n".join(lines[start_idx:end_idx])
+
+
+def run_ci_discovery_cascade(
+    container_upstream=None,
+    host_upstream=None,
+    host_mount_provenance=None,
+    nginx_t_output=None,
+    nginx_t_fail=False,
+    nginx_t_script=None,
+    container_root_conf=None,
+    nginx_syntax_script=None,
+    nginx_syntax_fail=False
+):
+    """
+    Executes the exact extracted production Nginx discovery shell script
+    against an isolated mock environment with a shell-native mock Docker CLI.
+    """
+    import tempfile
+    test_dir = tempfile.mkdtemp(prefix="mock_ci_disc_")
+    try:
+        bin_dir = Path(test_dir) / "bin"
+        state_dir = Path(test_dir) / "state"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        if container_upstream:
+            shutil.copy(container_upstream, state_dir / "container_upstream.conf")
+        if container_root_conf:
+            shutil.copy(container_root_conf, state_dir / "container_root.conf")
+        if nginx_t_script:
+            shutil.copy(nginx_t_script, state_dir / "nginx_t_script")
+        elif nginx_t_output:
+            (state_dir / "nginx_t_output.conf").write_text(nginx_t_output, encoding="utf-8")
+        elif nginx_t_fail:
+            (state_dir / "nginx_t_fail").write_text("failed", encoding="utf-8")
+
+        if nginx_syntax_script:
+            shutil.copy(nginx_syntax_script, state_dir / "nginx_syntax_script")
+        elif nginx_syntax_fail:
+            (state_dir / "nginx_syntax_fail").write_text("syntax fail", encoding="utf-8")
+
+        mock_mount = host_mount_provenance if host_mount_provenance is not None else (
+            Path(host_upstream).as_posix() if host_upstream else ""
+        )
+        (state_dir / "mount_source").write_text(mock_mount, encoding="utf-8")
+
+        posix_state_dir = state_dir.as_posix()
+        mock_docker = f"""#!/usr/bin/env bash
+STATE_DIR="{posix_state_dir}"
+CMD="$*"
+
+if [ "$1" = "ps" ]; then
+    echo "devsecops-nginx"
+    exit 0
+fi
+
+if [[ "$CMD" == *"inspect devsecops-nginx"* ]]; then
+    if [[ "$CMD" == *"Destination \\"/etc/nginx/conf.d/upstream.conf\\""* ]]; then
+        cat "$STATE_DIR/mount_source" 2>/dev/null || true
+        exit 0
+    fi
+    exit 0
+fi
+
+if [[ "$CMD" == *"exec devsecops-nginx test -s /etc/nginx/conf.d/upstream.conf"* ]]; then
+    [ -s "$STATE_DIR/container_upstream.conf" ] && exit 0 || exit 1
+fi
+
+if [[ "$CMD" == *"exec devsecops-nginx cat /etc/nginx/conf.d/upstream.conf"* ]]; then
+    cat "$STATE_DIR/container_upstream.conf" 2>/dev/null || exit 1
+    exit 0
+fi
+
+if [[ "$CMD" == *"exec devsecops-nginx nginx -T"* ]]; then
+    if [ -f "$STATE_DIR/nginx_t_script" ]; then
+        bash "$STATE_DIR/nginx_t_script" 2>&1
+        exit $?
+    fi
+    if [ -f "$STATE_DIR/nginx_t_fail" ]; then
+        echo "nginx: [emerg] open() \\"/etc/nginx/nginx.conf\\" failed (2: No such file or directory)" >&2
+        exit 1
+    fi
+    if [ -f "$STATE_DIR/nginx_t_output.conf" ]; then
+        cat "$STATE_DIR/nginx_t_output.conf"
+        exit 0
+    fi
+    exit 1
+fi
+
+if [[ "$CMD" == *"exec devsecops-nginx test -s /etc/nginx/nginx.conf"* ]]; then
+    [ -s "$STATE_DIR/container_root.conf" ] && exit 0 || exit 1
+fi
+
+if [[ "$CMD" == *"exec devsecops-nginx cat /etc/nginx/nginx.conf"* ]]; then
+    cat "$STATE_DIR/container_root.conf" 2>/dev/null || exit 1
+    exit 0
+fi
+
+if [[ "$CMD" == *"exec devsecops-nginx nginx -t"* ]]; then
+    if [ -f "$STATE_DIR/nginx_syntax_script" ]; then
+        bash "$STATE_DIR/nginx_syntax_script" 2>&1
+        exit $?
+    fi
+    if [ -f "$STATE_DIR/nginx_syntax_fail" ]; then
+        echo "nginx: [emerg] invalid parameter in /etc/nginx/nginx.conf:15" >&2
+        exit 1
+    fi
+    echo "nginx: syntax ok"
+    exit 0
+fi
+
+exit 0
+"""
+        (bin_dir / "docker").write_text(mock_docker, encoding="utf-8", newline="\n")
+
+        extracted_prod_script = extract_ci_discovery_script()
+        runner = f"""#!/usr/bin/env bash
+set -e
+NGINX_RUNNING=true
+{extracted_prod_script}
+echo "DISCOVERED_ROUTE=$CURRENT_ROUTE"
+echo "DISCOVERED_SOURCE=$DISCOVERY_SOURCE"
+"""
+        runner_path = Path(test_dir) / "run_discovery.sh"
+        runner_path.write_text(runner, encoding="utf-8", newline="\n")
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir.as_posix()}:{env.get('PATH', '')}"
+        if host_upstream:
+            env["HOST_UPSTREAM_FILE"] = Path(host_upstream).as_posix()
+
+        proc = subprocess.run(
+            [BASH_BIN, runner_path.as_posix()],
+            env=env,
+            capture_output=True,
+            text=True
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    finally:
+        shutil.rmtree(test_dir, ignore_errors=True)
 
 
 def run_ci_migration(tmp_path, setup_flags=None):
@@ -1200,12 +1401,12 @@ exit 0
 
 
 # ------------------------------------------------------------------------------
-# SCENARIO 29: Inline/minified route detection in CI
+# SCENARIO 29: Isolated parser unit test: inline/minified route detection
 # ------------------------------------------------------------------------------
 def test_ci_route_detection_inline_and_minified():
     """
-    Verifies that CI route parser correctly detects inline / minified directives
-    following opening braces or semicolons without false negatives.
+    Unit test for isolated parser regexes: verifies that route regex patterns correctly
+    detect inline / minified directives following opening braces or semicolons.
     """
     rc, out, _ = run_ci_parser("server { location / { proxy_pass http://app:5000; } }")
     assert rc == 0
@@ -1225,12 +1426,12 @@ def test_ci_route_detection_inline_and_minified():
 
 
 # ------------------------------------------------------------------------------
-# SCENARIO 30: Upstream directives with optional parameters in CI
+# SCENARIO 30: Isolated parser unit test: upstream directives with optional parameters
 # ------------------------------------------------------------------------------
 def test_ci_route_detection_optional_parameters():
     """
-    Verifies that upstream directives with parameters (weight, max_fails, backup)
-    or trailing spaces are parsed without error.
+    Unit test for isolated parser regexes: verifies that upstream directives with
+    parameters (weight, max_fails, backup) or trailing spaces are parsed without error.
     """
     rc, out, _ = run_ci_parser("upstream app_backend {\n    server devsecops-app-blue:5000 weight=5 max_fails=3;\n}")
     assert rc == 0
@@ -1246,12 +1447,13 @@ def test_ci_route_detection_optional_parameters():
 
 
 # ------------------------------------------------------------------------------
-# SCENARIO 31: Both legacy backend aliases in CI
+# SCENARIO 31: Isolated parser unit test: both legacy backend aliases
 # ------------------------------------------------------------------------------
 def test_ci_route_detection_both_legacy_aliases():
     """
-    Verifies that both legacy Docker alias 'app:5000' and container name
-    'devsecops-app:5000' are supported across both server and proxy_pass directives.
+    Unit test for isolated parser regexes: verifies that both legacy Docker alias
+    'app:5000' and container name 'devsecops-app:5000' are supported across both server
+    and proxy_pass directives.
     """
     rc, out, _ = run_ci_parser("location / { proxy_pass http://app:5000; }")
     assert rc == 0
@@ -2286,3 +2488,410 @@ def test_ordinary_mutable_reference_rejected_by_immutable_validator(mock_env):
     res = run_deploy(mock_env, "test-repo/app:commit_safe123", allow_raw_image=True)
     assert res.returncode == 1
     assert "Deployment rejected: DEPLOY_IMAGE must reference an immutable digest" in res.stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 60: Tier 1 container-upstream discovery succeeds with verified syntax
+# ------------------------------------------------------------------------------
+def test_ci_discovery_tier1_container_upstream_success(tmp_path):
+    """
+    Scenario 60: Tier 1 container-upstream discovery. When /etc/nginx/conf.d/upstream.conf
+    is present and readable in the running container, the active route is discovered
+    directly from Tier 1, and running Nginx syntax validation is verified.
+    """
+    container_upstream = tmp_path / "upstream.conf"
+    container_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8"
+    )
+    syntax_script = tmp_path / "syntax.sh"
+    syntax_script.write_text("#!/bin/bash\necho 'nginx: syntax ok'\nexit 0\n", encoding="utf-8")
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=container_upstream.as_posix(),
+        nginx_syntax_script=syntax_script.as_posix()
+    )
+    assert rc == 0
+    assert "DISCOVERED_ROUTE=devsecops-app-green" in stdout
+    assert "DISCOVERED_SOURCE=container /etc/nginx/conf.d/upstream.conf" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 61: Tier 1 container-upstream discovery preempts Tier 3 runtime dump
+# ------------------------------------------------------------------------------
+def test_ci_discovery_tier1_preempts_tier3_runtime_dump(tmp_path):
+    """
+    Scenario 61a: Tier 1 container-upstream discovery takes precedence over Tier 3
+    runtime dump. When /etc/nginx/conf.d/upstream.conf is readable directly from the
+    container, route discovery succeeds from Tier 1 without invoking or depending
+    on nginx -T runtime dump.
+    """
+    container_upstream = tmp_path / "upstream.conf"
+    container_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8"
+    )
+    nginx_t_script = tmp_path / "nginx_t.sh"
+    nginx_t_script.write_text("#!/bin/bash\necho 'nginx -T dump failed' >&2\nexit 1\n", encoding="utf-8")
+    syntax_script = tmp_path / "syntax.sh"
+    syntax_script.write_text("#!/bin/bash\necho 'nginx: syntax ok'\nexit 0\n", encoding="utf-8")
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=container_upstream.as_posix(),
+        nginx_t_script=nginx_t_script.as_posix(),
+        nginx_syntax_script=syntax_script.as_posix()
+    )
+    assert rc == 0
+    assert "DISCOVERED_ROUTE=devsecops-app-blue" in stdout
+    assert "DISCOVERED_SOURCE=container /etc/nginx/conf.d/upstream.conf" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+def test_ci_discovery_failed_nginx_t_with_syntax_failure_aborts(tmp_path):
+    """
+    Scenario 61b: Reading upstream.conf alone does NOT prove syntax is valid.
+    If running container syntax check fails, deployment aborts fail-closed.
+    """
+    container_upstream = tmp_path / "upstream.conf"
+    container_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8"
+    )
+    nginx_t_script = tmp_path / "nginx_t.sh"
+    nginx_t_script.write_text("#!/bin/bash\necho 'nginx -T failed' >&2\nexit 1\n", encoding="utf-8")
+    syntax_script = tmp_path / "syntax.sh"
+    syntax_script.write_text(
+        "#!/bin/bash\necho 'nginx: [emerg] invalid parameter in /etc/nginx/nginx.conf:15' >&2\nexit 1\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=container_upstream.as_posix(),
+        nginx_t_script=nginx_t_script.as_posix(),
+        nginx_syntax_script=syntax_script.as_posix()
+    )
+    assert rc == 1
+    assert "Inspecting active route from container /etc/nginx/conf.d/upstream.conf..." in stdout
+    assert "CRITICAL: Running Nginx configuration failed syntax validation" in stderr
+    assert "invalid parameter in /etc/nginx/nginx.conf:15" in stderr
+    assert "Aborting deployment because Nginx configuration is invalid." in stderr
+
+
+def test_ci_discovery_failed_nginx_t_with_valid_syntax_succeeds(tmp_path):
+    """
+    Scenario 61c: Failed nginx -T followed by successful syntax check allows deployment.
+    """
+    host_upstream = tmp_path / "host_upstream.conf"
+    host_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8"
+    )
+    nginx_t_script = tmp_path / "nginx_t.sh"
+    nginx_t_script.write_text("#!/bin/bash\necho 'nginx: [warn] dump issue' >&2\nexit 1\n", encoding="utf-8")
+    syntax_script = tmp_path / "syntax.sh"
+    syntax_script.write_text("#!/bin/bash\necho 'nginx: syntax ok'\nexit 0\n", encoding="utf-8")
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        host_upstream=host_upstream.as_posix(),
+        nginx_t_script=nginx_t_script.as_posix(),
+        nginx_syntax_script=syntax_script.as_posix()
+    )
+    assert rc == 0
+    assert "DISCOVERED_ROUTE=devsecops-app-green" in stdout
+    assert "host" in stdout and "(verified mount)" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 62: Missing upstream file with legacy inline route
+# ------------------------------------------------------------------------------
+def test_ci_discovery_missing_upstream_legacy_inline_route(tmp_path):
+    """
+    Scenario 62: When modular upstream files are missing and nginx -T fails,
+    the cascade falls back to legacy /etc/nginx/nginx.conf.
+    """
+    root_conf = tmp_path / "nginx.conf"
+    root_conf.write_text(
+        "events {}\nhttp {\n    server {\n        listen 80;\n        location / {\n            proxy_pass http://devsecops-app:5000;\n        }\n    }\n}\n",
+        encoding="utf-8"
+    )
+    syntax_script = tmp_path / "syntax.sh"
+    syntax_script.write_text("#!/bin/bash\necho 'nginx: syntax ok'\nexit 0\n", encoding="utf-8")
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_root_conf=root_conf.as_posix(),
+        nginx_syntax_script=syntax_script.as_posix()
+    )
+    assert rc == 0
+    assert "DISCOVERED_ROUTE=devsecops-app" in stdout
+    assert "DISCOVERED_SOURCE=container /etc/nginx/nginx.conf" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 63: Empty upstream configuration aborts fail-closed
+# ------------------------------------------------------------------------------
+def test_ci_discovery_empty_upstream_aborts_fail_closed(tmp_path):
+    """
+    Scenario 63: Empty or whitespace-only upstream configuration triggers fail-closed abort.
+    """
+    empty_upstream = tmp_path / "empty_upstream.conf"
+    empty_upstream.write_text("   \n\t  \n  ", encoding="utf-8")
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=empty_upstream.as_posix()
+    )
+    assert rc == 1
+    assert "CRITICAL: Nginx is running but all configuration discovery sources were missing or empty. Aborting." in stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 64: Both blue and green active upstream directives abort as ambiguous
+# ------------------------------------------------------------------------------
+def test_ci_discovery_both_blue_and_green_aborts_ambiguous(tmp_path):
+    """
+    Scenario 64: Configuration with both active blue and green server directives
+    is detected as ambiguous and aborts fail-closed.
+    """
+    ambiguous_upstream = tmp_path / "ambiguous_upstream.conf"
+    ambiguous_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=ambiguous_upstream.as_posix()
+    )
+    assert rc == 1
+    assert "CRITICAL: Ambiguous active routes detected in Nginx configuration (2 conflicting matches" in stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 65: Commented-out backend directive ignored
+# ------------------------------------------------------------------------------
+def test_ci_discovery_commented_out_directive_ignored(tmp_path):
+    """
+    Scenario 65: Commented-out backend directive is ignored; active directive is identified.
+    """
+    commented_upstream = tmp_path / "commented_upstream.conf"
+    commented_upstream.write_text(
+        "upstream app_backend {\n    # server devsecops-app-blue:5000;\n    server devsecops-app-green:5000; # server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8"
+    )
+    syntax_script = tmp_path / "syntax.sh"
+    syntax_script.write_text("#!/bin/bash\necho 'nginx: syntax ok'\nexit 0\n", encoding="utf-8")
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=commented_upstream.as_posix(),
+        nginx_syntax_script=syntax_script.as_posix()
+    )
+    assert rc == 0
+    assert "DISCOVERED_ROUTE=devsecops-app-green" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 66: Unknown backend target rejected
+# ------------------------------------------------------------------------------
+def test_ci_discovery_unknown_backend_target_rejected(tmp_path):
+    """
+    Scenario 66: Unrecognized backend targets are rejected fail-closed.
+    """
+    # 1. Unknown server target
+    unknown_server_conf = tmp_path / "unknown_server.conf"
+    unknown_server_conf.write_text(
+        "upstream app_backend {\n    server rogue-backend:5000;\n}\n",
+        encoding="utf-8"
+    )
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=unknown_server_conf.as_posix()
+    )
+    assert rc == 1
+    assert "CRITICAL: Unknown active backend target detected in Nginx configuration" in stderr
+    assert "Unknown upstream server target detected: 'rogue-backend'" in stderr
+
+    # 2. Unknown proxy_pass target
+    unknown_proxy_conf = tmp_path / "unknown_proxy.conf"
+    unknown_proxy_conf.write_text(
+        "server {\n    location / {\n        proxy_pass http://unauthorized-host:5000;\n    }\n}\n",
+        encoding="utf-8"
+    )
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_root_conf=unknown_proxy_conf.as_posix()
+    )
+    assert rc == 1
+    assert "CRITICAL: Unknown active backend target detected in Nginx configuration" in stderr
+    assert "Unknown proxy_pass target detected: 'unauthorized-host'" in stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 67: Ambiguous upstream and direct proxy routes rejected
+# ------------------------------------------------------------------------------
+def test_ci_discovery_ambiguous_upstream_and_direct_proxy_rejected(tmp_path):
+    """
+    Scenario 67: If both upstream server and direct proxy_pass point to different
+    slots, detection aborts as ambiguous.
+    """
+    ambiguous_conf = tmp_path / "ambiguous_mixed.conf"
+    ambiguous_conf.write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n"
+        "server {\n    location / {\n        proxy_pass http://devsecops-app-green:5000;\n    }\n}\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        container_upstream=ambiguous_conf.as_posix()
+    )
+    assert rc == 1
+    assert "CRITICAL: Ambiguous active routes detected in Nginx configuration (2 conflicting matches" in stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 68: Failed nginx -T diagnostics captured and logged
+# ------------------------------------------------------------------------------
+def test_ci_discovery_failed_nginx_t_captures_diagnostics(tmp_path):
+    """
+    Scenario 68: Confirms that when nginx -T fails, diagnostics are NOT redirected
+    to /dev/null but captured and printed with [nginx -T] prefix for operators.
+    """
+    nginx_t_script = tmp_path / "nginx_t_failing.sh"
+    nginx_t_script.write_text(
+        "#!/bin/bash\n"
+        "echo 'nginx: [emerg] open() \"/etc/nginx/nginx.conf\" failed (2: No such file or directory)' >&2\n"
+        "exit 1\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        nginx_t_script=nginx_t_script.as_posix()
+    )
+    assert rc == 1
+    assert "[nginx -T] nginx: [emerg] open() \"/etc/nginx/nginx.conf\" failed (2: No such file or directory)" in stdout
+    assert "CRITICAL: Nginx is running but all configuration discovery sources were missing or empty. Aborting." in stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 69: Independent Tier 3 nginx -T success with modular upstream dump
+# ------------------------------------------------------------------------------
+def test_ci_discovery_tier3_nginx_t_success_modular_upstream():
+    """
+    Scenario 69: Container and host upstream are both unavailable.
+    Tier 3 runtime dump (nginx -T) succeeds and returns a modular configuration
+    containing an active slot. Active route is discovered directly from Tier 3.
+    """
+    dump_content = (
+        "# configuration file /etc/nginx/nginx.conf:\n"
+        "events {}\n"
+        "http { include /etc/nginx/conf.d/*.conf; }\n\n"
+        "# configuration file /etc/nginx/conf.d/upstream.conf:\n"
+        "upstream app_backend {\n"
+        "    server devsecops-app-green:5000;\n"
+        "}\n"
+    )
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        nginx_t_output=dump_content
+    )
+    assert rc == 0
+    assert "Inspecting active route from runtime dump (nginx -T) (exit code 0)..." in stdout
+    assert "DISCOVERED_ROUTE=devsecops-app-green" in stdout
+    assert "DISCOVERED_SOURCE=runtime dump (nginx -T)" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 70: Independent Tier 3 nginx -T failure emits diagnostics and aborts
+# ------------------------------------------------------------------------------
+def test_ci_discovery_tier3_nginx_t_failure_emits_diagnostics_and_aborts():
+    """
+    Scenario 70: Container and host upstream are both unavailable.
+    Tier 3 runtime dump (nginx -T) fails and emits error diagnostics.
+    Workflow logs diagnostics with [nginx -T] prefix and aborts fail-closed.
+    """
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        nginx_t_fail=True
+    )
+    assert rc == 1
+    assert "'nginx -T' failed with exit status 1:" in stdout
+    assert "[nginx -T] nginx: [emerg] open() \"/etc/nginx/nginx.conf\" failed" in stdout
+    assert "CRITICAL: Nginx is running but all configuration discovery sources were missing or empty. Aborting." in stderr
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 71: Host bind-mount provenance verified via docker inspect
+# ------------------------------------------------------------------------------
+def test_ci_discovery_host_mount_provenance_verified_succeeds(tmp_path):
+    """
+    Scenario 71: Container upstream is unavailable.
+    Host upstream file exists, and docker inspect confirms its exact host path
+    is mounted into /etc/nginx/conf.d/upstream.conf.
+    Host configuration is trusted as authoritative (verified mount).
+    """
+    host_upstream = tmp_path / "upstream.conf"
+    host_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-green:5000;\n}\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        host_upstream=host_upstream.as_posix(),
+        host_mount_provenance=host_upstream.as_posix()
+    )
+    assert rc == 0
+    assert "(verified mount)" in stdout
+    assert "DISCOVERED_ROUTE=devsecops-app-green" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 72: Host bind-mount provenance unverified skips host file
+# ------------------------------------------------------------------------------
+def test_ci_discovery_host_mount_provenance_unverified_skips_host(tmp_path):
+    """
+    Scenario 72: Container upstream is unavailable.
+    Host upstream file exists (pointing to blue), BUT docker inspect reports
+    that the container's mount source is different (unverified provenance).
+    The host file is NOT trusted. Discovery falls through to Tier 3 (nginx -T)
+    which specifies green. Green is selected, proving unverified host was ignored.
+    """
+    host_upstream = tmp_path / "unmounted_upstream.conf"
+    host_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        host_upstream=host_upstream.as_posix(),
+        host_mount_provenance="/some/other/path/upstream.conf",
+        nginx_t_output="upstream app_backend { server devsecops-app-green:5000; }"
+    )
+    assert rc == 0
+    assert "Skipping unverified host file." in stdout
+    assert "DISCOVERED_ROUTE=devsecops-app-green" in stdout
+    assert "DISCOVERED_SOURCE=runtime dump (nginx -T)" in stdout
+    assert "Running Nginx configuration syntax is verified valid" in stdout
+
+
+# ------------------------------------------------------------------------------
+# SCENARIO 73: Host bind-mount provenance unverified and Tier 3 fails triggers abort
+# ------------------------------------------------------------------------------
+def test_ci_discovery_host_mount_provenance_unverified_and_tier3_fails_aborts(tmp_path):
+    """
+    Scenario 73: Host upstream file exists but mount provenance cannot be verified.
+    Tier 3 (nginx -T) also fails. Workflow refuses to proceed on uncertain
+    configuration and aborts fail-closed.
+    """
+    host_upstream = tmp_path / "unmounted_upstream.conf"
+    host_upstream.write_text(
+        "upstream app_backend {\n    server devsecops-app-blue:5000;\n}\n",
+        encoding="utf-8"
+    )
+
+    rc, stdout, stderr = run_ci_discovery_cascade(
+        host_upstream=host_upstream.as_posix(),
+        host_mount_provenance="",
+        nginx_t_fail=True
+    )
+    assert rc == 1
+    assert "Skipping unverified host file." in stdout
+    assert "'nginx -T' failed with exit status 1:" in stdout
+    assert "CRITICAL: Nginx is running but all configuration discovery sources were missing or empty. Aborting." in stderr
