@@ -28,11 +28,11 @@ Modern enterprise software engineering requires high-velocity software delivery 
 This project, titled **"Cloud-Based DevSecOps Platform for Automated Application Deployment and Monitoring,"** designs, implements, and empirically validates an end-to-end, production-grade DevSecOps platform. Built upon an enterprise consulting application ("ABC Free Consultants") paired with an engineering management console and real-time operations dashboard, the platform automates the entire Software Development Lifecycle (SDLC) from code commit to cloud deployment.
 
 The platform integrates:
-1. **Automated Continuous Integration (CI):** 84 automated tests (9 core application route tests, 42 Blue/Green deployment engine and recovery tests, and 33 platform telemetry and security tests) executed via `pytest`.
-2. **Static Application Security Testing (SAST):** Code quality, code smells, bug detection, and security hotspot scanning via an ephemeral SonarQube Community Edition container.
-3. **Software Composition Analysis (SCA) & Container Security:** Aqua Security Trivy scanning both repository dependencies and container image layers with zero-tolerance blocking gates on Critical and High vulnerabilities.
+1. **Automated Continuous Integration (CI):** 152 automated tests (9 core application route tests, 75 Blue/Green deployment engine and recovery tests, and 68 platform telemetry, digest, and route-discovery contract tests) executed via `pytest`.
+2. **Static Application Security Testing (SAST):** Code quality, code smells, bug detection, and security hotspot scanning via an ephemeral SonarQube Community Edition container with mandatory Quality Gate enforcement.
+3. **Software Composition Analysis (SCA) & Container Security:** Python dependency security scanning via `pip-audit`, CycloneDX SBOM generation, and Aqua Security Trivy scanning both repository dependencies and container image layers with a Zero Exceptions Policy on Critical and High vulnerabilities.
 4. **Infrastructure-as-Code (IaC):** Declarative Terraform code provisioning an isolated AWS VPC, public subnets, route tables, internet gateways, least-privilege IAM roles, an ECR container repository with AES256 encryption, and an EC2 instance enforcing IMDSv2.
-5. **Continuous Deployment (CD) with Zero-Downtime Blue/Green Cutover:** Agent-based deployment orchestrated via AWS Systems Manager (SSM Run Command) with dual application slots (`devsecops-app-blue` and `devsecops-app-green`), pre-warming candidate containers, isolated Nginx configuration validation, atomic upstream switching (`nginx -s reload`), and automatic sub-second rollback.
+5. **Continuous Deployment (CD) with Zero-Downtime Blue/Green Cutover:** Agent-based deployment orchestrated via AWS Systems Manager (SSM Run Command) with dual application slots (`devsecops-app-blue` and `devsecops-app-green`), immutable image digest promotion, 4-tier Nginx route discovery with bind-mount provenance verification, pre-warming candidate containers, isolated Nginx configuration validation, atomic upstream switching (`nginx -s reload`), and automatic sub-second rollback.
 6. **Continuous Monitoring & Observability:** Real-time Golden Signals metrics collection via Prometheus and provisioned operational dashboards in Grafana.
 
 ---
@@ -180,29 +180,31 @@ Built using **Flask 3.1.3**, the application delivers dual interfaces:
 
 ### 6.3 Module 3: Security & Platform Blueprints (`app/platform_routes.py`, `app/platform_service.py`)
 - Provides honest, grounded telemetry across system components:
-  - Parses `.trivyignore` to report exact ignored CVEs (`GHSA-6v7p-g79w-8964`, `CVE-2025-47273`) with full policy justification.
+  - Enforces a Zero Exceptions Policy reporting 0 active CVE exemptions in production.
   - Separates local container development telemetry from cloud production infrastructure.
   - Maps GitHub Actions workflow states (`completed` + `success` $\to$ `PASSED`; `in_progress` $\to$ `RUNNING`; `failure` $\to$ `FAILED`).
+  - Distinguishes latest CI test-and-scan push runs from manual production deployments.
 
 ---
 
 ## 7. DEVSECOPS PIPELINE & SECURITY GATES
 
-### 7.1 The 13 Pipeline Stages in GitHub Actions
+### 7.1 The 14 Canonical Pipeline Stages in GitHub Actions
 The pipeline defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) enforces a strict 4-job architecture:
 1. **Checkout Source:** SHA-pinned action `actions/checkout@v4` fetches the repository.
 2. **Python Environment Setup:** Configures Python 3.12 with pip cache optimization.
 3. **Dependency Installation:** Upgrades pip and installs locked application dependencies and testing frameworks.
-4. **Pytest Automated Testing:** Executes the comprehensive 84-test automated test suite.
-5. **Static Code Quality (SonarQube):** Spins up an ephemeral SonarQube container on port 9000, generates an ephemeral analysis token, and scans `app/` for bugs, vulnerabilities, and security hotspots.
-6. **Trivy Filesystem Vulnerability Scan:** Audits Python packages against the Aqua Security vulnerability database, failing on unmitigated High or Critical CVEs.
-7. **Container Image Build:** Builds the hardened Alpine-based Docker container image `devsecops-platform`.
-8. **Trivy Container Image Scan:** Scans the built container layers for OS and binary vulnerabilities with zero-tolerance blocking gates.
-9. **Authorization & Branch Gate:** Pull requests and standard pushes terminate after testing and scanning; production deployment requires explicit manual authorization via `workflow_dispatch` with `deploy_to_production: true` on `main`.
-10. **AWS ECR Authentication:** Authenticates the runner against Amazon ECR using GitHub OIDC role federation.
-11. **ECR Image Publication:** Tags and pushes container images with immutable commit SHA and `latest` tags.
-12. **AWS SSM Blue/Green Deployment:** Dispatches the zero-downtime deployment script to EC2 via AWS Systems Manager Run Command (no open SSH ports).
-13. **Independent Production Health Verification:** The CI runner independently polls `http://<EC2-IP>/health` to confirm HTTP 200 with `connected: true` and `mode: live_mysql`.
+4. **Pytest Automated Testing:** Executes the comprehensive 152-test automated test suite across unit, platform, and deployment logic.
+5. **Python Dependency Vulnerability Scan (pip-audit):** Audits project dependencies for known vulnerabilities, failing on vulnerable packages.
+6. **Static Code Quality (SonarQube):** Spins up an ephemeral SonarQube container on port 9000, generates an ephemeral analysis token, and scans `app/` for bugs, vulnerabilities, and security hotspots with Quality Gate enforcement.
+7. **Trivy Filesystem Vulnerability Scan:** Audits Python packages against the Aqua Security vulnerability database, failing on unmitigated High or Critical CVEs.
+8. **Container Image Build & Smoke Test:** Builds the hardened Alpine-based Docker container image `devsecops-platform` and performs a curl smoke test.
+9. **Trivy Container Image Scan & SBOM:** Scans the built container layers for OS and binary vulnerabilities with zero-tolerance blocking gates and generates a CycloneDX SBOM.
+10. **Authorization & Branch Gate:** Pull requests and standard pushes terminate after testing and scanning; production deployment requires explicit manual authorization via `workflow_dispatch` with `deploy_to_production: true` on `main`.
+11. **AWS ECR Authentication:** Authenticates the runner against Amazon ECR using GitHub OIDC role federation (zero static AWS keys in CI).
+12. **ECR Image Publication:** Promotes the exact verified Docker image from Stage 8, publishing immutable commit SHA and `latest` tags with immutable digest verification.
+13. **AWS SSM Blue/Green Deployment:** Dispatches the zero-downtime deployment script to EC2 via AWS Systems Manager Run Command (no open SSH ports) using a 4-tier Nginx route discovery cascade and host bind-mount provenance verification.
+14. **Independent Production Health Verification:** The CI runner independently polls `http://<EC2-IP>/health` to confirm HTTP 200 with `connected: true` and `mode: live_mysql`.
 
 ---
 
@@ -211,13 +213,19 @@ The pipeline defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) e
 ### 8.1 Architecture & Workflow
 The Blue/Green deployment engine ([`scripts/deploy_blue_green.sh`](scripts/deploy_blue_green.sh)) orchestrates zero-downtime application updates on the EC2 host:
 1. **Concurrency Control:** Acquires an exclusive deployment lock (`/tmp/deploy_blue_green.lock`) using `flock`, with directory-based fallback. Stale locks (>600s) are automatically reclaimed.
-2. **Route Discovery Without Assumptions:** Parses `/etc/nginx/conf.d/upstream.conf` and live runtime `nginx -T`, strips comments, checks strict directive patterns, and detects the active slot (Blue or Green) without bias. Fails closed on ambiguous or split configurations.
-3. **Pre-warming Candidate Container:** Starts the candidate container (`devsecops-app-green` on port 5002 if Blue is active, or `devsecops-app-blue` on port 5001 if Green is active) while the active container continues serving live traffic.
-4. **Isolated Health Probing:** Probes candidate health on its direct port for up to 30 seconds. If the candidate fails to respond or cannot connect to MySQL, the candidate container is stopped and live traffic remains uninterrupted.
-5. **Pre-flight Nginx Validation:** Validates the proposed Nginx upstream configuration inside an isolated `nginx:alpine` container with `nginx -t` before modifying any host configuration.
-6. **Atomic Traffic Cutover:** Writes the verified upstream configuration to `/etc/nginx/conf.d/upstream.conf` and triggers `nginx -s reload`, seamlessly switching incoming connections with 0 dropped requests.
-7. **Automated Rollback:** If post-switch health validation fails on port 80, the engine immediately restores the backed-up upstream configuration and reloads Nginx in under 3 seconds.
-8. **Draining & Cleanup:** Only after the candidate passes all health checks is the previous container stopped. The `cleanup_on_exit` trap explicitly protects the active serving container from being terminated during early aborts.
+2. **4-Tier Route Discovery Cascade:**
+   - **Tier 1:** Reads container-side `/etc/nginx/conf.d/upstream.conf` directly via `docker exec`.
+   - **Tier 2:** Reads host-side `/home/ec2-user/nginx-conf/upstream.conf` only after verifying mount provenance against `docker inspect devsecops-nginx`.
+   - **Tier 3:** Falls back to live runtime dump (`docker exec devsecops-nginx nginx -T 2>&1`), preserving operator diagnostics on stderr.
+   - **Tier 4:** Compatibility fallback to container root `/etc/nginx/nginx.conf`.
+   - Strips comments, checks strict directive patterns, rejects unknown backend targets (`rogue-backend`), and detects the active slot (Blue or Green) without bias. Fails closed on ambiguous or split configurations.
+3. **Mandatory Running Container Syntax Validation:** Verifies running Nginx syntax via `docker exec devsecops-nginx nginx -t 2>&1` before proceeding.
+4. **Pre-warming Candidate Container:** Starts the candidate container (`devsecops-app-green` on port 5002 if Blue is active, or `devsecops-app-blue` on port 5001 if Green is active) while the active container continues serving live traffic.
+5. **Isolated Health Probing:** Probes candidate health on its direct port for up to 30 seconds. If the candidate fails to respond or cannot connect to MySQL, the candidate container is stopped and live traffic remains uninterrupted.
+6. **Pre-flight Nginx Validation:** Validates the proposed Nginx upstream configuration inside an isolated `nginx:alpine` container with `nginx -t` before modifying any host configuration.
+7. **Atomic Traffic Cutover:** Writes the verified upstream configuration through the container-side mounted path without destructive host `mv` operations (preserving container bind-mount inode) and triggers `nginx -s reload`, seamlessly switching incoming connections with 0 dropped requests.
+8. **Automated Rollback:** If post-switch health validation fails on port 80, the engine immediately restores the backed-up upstream configuration and reloads Nginx in under 3 seconds.
+9. **Draining & Cleanup:** Only after the candidate passes all health checks is the previous container stopped. The `cleanup_on_exit` trap explicitly protects the active serving container from being terminated during early aborts.
 
 ---
 
@@ -239,9 +247,9 @@ The Blue/Green deployment engine ([`scripts/deploy_blue_green.sh`](scripts/deplo
 
 ---
 
-## 10. TEST METHODOLOGY & COMPLETE 84-TEST ACCEPTANCE MATRIX
+## 10. TEST METHODOLOGY & COMPLETE 152-TEST ACCEPTANCE MATRIX
 
-The platform test suite contains **84 automated tests**, all executing and passing under `pytest` with zero failures.
+The platform test suite contains **152 automated tests**, all executing and passing under `pytest` with zero failures across three specialized test suites.
 
 ### 10.1 Core Application Tests (`tests/test_app.py` — 9 Tests)
 | # | Test Name | Target / Verification | Result |
@@ -256,7 +264,7 @@ The platform test suite contains **84 automated tests**, all executing and passi
 | 8 | `test_api_contact_missing_fields`| Missing mandatory fields return HTTP 400 with specific field indicators | **PASS** |
 | 9 | `test_api_contact_get` | `GET /api/contact` returns list of consultations and total count | **PASS** |
 
-### 10.2 Blue/Green Deployment Engine Tests (`tests/test_deploy_blue_green.py` — 42 Tests)
+### 10.2 Blue/Green Deployment Engine & Route Discovery Tests (`tests/test_deploy_blue_green.py` — 75 Tests)
 | # | Test Name | Target / Verification | Result |
 |---|---|---|---|
 | 10 | `test_active_blue_switches_to_green` | Verified Blue active route switches to Green candidate upon health check | **PASS** |
@@ -287,9 +295,9 @@ The platform test suite contains **84 automated tests**, all executing and passi
 | 35 | `test_failed_backup_creation_refuses_cutover` | Aborts cutover if upstream backup creation fails or is empty | **PASS** |
 | 36 | `test_preservation_of_mysql_and_persistent_volume_on_all_failures` | Database and persistent volumes are never stopped or pruned | **PASS** |
 | 37 | `test_ci_nginx_bind_mount_and_stale_config_logic` | CI workflow validates bind mounts and re-provisions if inconsistent | **PASS** |
-| 38 | `test_ci_route_detection_inline_and_minified` | CI route parser handles minified and single-line directives | **PASS** |
-| 39 | `test_ci_route_detection_optional_parameters` | CI route parser handles directives with `weight`, `max_fails`, etc. | **PASS** |
-| 40 | `test_ci_route_detection_both_legacy_aliases` | CI handles both `app:5000` and `devsecops-app:5000` aliases | **PASS** |
+| 38 | `test_ci_route_detection_inline_and_minified` | Isolated parser unit test: inline/minified directive pattern detection | **PASS** |
+| 39 | `test_ci_route_detection_optional_parameters` | Isolated parser unit test: upstream directives with optional parameters | **PASS** |
+| 40 | `test_ci_route_detection_both_legacy_aliases` | Isolated parser unit test: legacy `app:5000` and `devsecops-app:5000` | **PASS** |
 | 41 | `test_ci_missing_host_config_recovered_from_running_container` | Recovers configuration via `docker cp` if host files missing | **PASS** |
 | 42 | `test_ci_failed_or_empty_container_backup_aborts_safely` | Aborts migration if container config copy is empty | **PASS** |
 | 43 | `test_ci_invalid_generated_config_aborts_before_replacing_service` | CI aborts before touching running Nginx if generated syntax fails | **PASS** |
@@ -301,43 +309,111 @@ The platform test suite contains **84 automated tests**, all executing and passi
 | 49 | `test_ci_stop_failure_restores_name_and_aborts` | Stop failure restores container name and aborts | **PASS** |
 | 50 | `test_ci_upstream_backup_failure_aborts_safely` | Upstream backup failure halts CI migration | **PASS** |
 | 51 | `test_ci_restoration_of_both_configuration_files_on_rollback` | Rollback in CI restores both `nginx.conf` and `upstream.conf` | **PASS** |
+| 52 | `test_inplace_nginx_update_without_container_restart` | In-place Nginx configuration reload without container restarts | **PASS** |
+| 53 | `test_invalid_nginx_configuration_recovery_inplace` | Invalid Nginx syntax recovery in-place restores backup | **PASS** |
+| 54 | `test_failed_reload_recovery_inplace` | Failed reload recovery in-place triggers safe fallback | **PASS** |
+| 55 | `test_deployment_state_creation_and_transitions` | State file persistence across deployment lifecycle | **PASS** |
+| 56 | `test_standalone_rollback_success` | Standalone CLI rollback executes cleanly | **PASS** |
+| 57 | `test_standalone_rollback_already_completed_idempotent` | Standalone rollback is safe and idempotent | **PASS** |
+| 58 | `test_standalone_rollback_missing_or_malformed_state` | Missing or malformed deployment state aborts fail-closed | **PASS** |
+| 59 | `test_standalone_rollback_ambiguous_targets_refuses_cleanup` | Ambiguous rollback targets refuse candidate cleanup | **PASS** |
+| 60 | `test_candidate_cleanup_protects_infrastructure_containers` | Candidate cleanup never targets MySQL or Nginx infrastructure | **PASS** |
+| 61 | `test_external_ssm_recovery_reporting` | External SSM rollback reporting across Success, Failed, TimedOut | **PASS** |
+| 62 | `test_rollback_reports_nginx_syntax_diagnostics` | Rollback reports actual Nginx syntax diagnostics on failure | **PASS** |
+| 63 | `test_rollback_failure_preserves_candidate_container` | Rollback failure preserves healthy candidate container | **PASS** |
+| 64 | `test_rollback_rejects_empty_or_malformed_backup_configuration` | Rollback rejects empty or malformed backup configuration fail-closed | **PASS** |
+| 65 | `test_rollback_uses_container_mount_without_host_mv` | Single-file bind mount restoration preserves container-side inode & no host mv | **PASS** |
+| 66 | `test_failed_container_restoration_prevents_reload_and_cleanup` | Failed container restoration prevents reload and candidate cleanup | **PASS** |
+| 67 | `test_deployment_id_extraction_matrix` | Deployment ID extraction matrix across immutable and tagged references | **PASS** |
+| 68 | `test_ordinary_mutable_reference_rejected_by_immutable_validator` | Ordinary mutable tag rejected by deployment script validation | **PASS** |
+| 69 | `test_ci_discovery_tier1_container_upstream_success` | Tier 1 container-upstream discovery succeeds with verified syntax | **PASS** |
+| 70 | `test_ci_discovery_tier1_preempts_tier3_runtime_dump` | Tier 1 container-upstream discovery preempts Tier 3 runtime dump | **PASS** |
+| 71 | `test_ci_discovery_failed_nginx_t_with_syntax_failure_aborts` | Failed nginx -T with syntax failure aborts deployment | **PASS** |
+| 72 | `test_ci_discovery_failed_nginx_t_with_valid_syntax_succeeds` | Failed nginx -T with valid syntax proceeds safely | **PASS** |
+| 73 | `test_ci_discovery_missing_upstream_legacy_inline_route` | Missing upstream file falls back to legacy inline route | **PASS** |
+| 74 | `test_ci_discovery_empty_upstream_aborts_fail_closed` | Empty upstream configuration aborts fail-closed | **PASS** |
+| 75 | `test_ci_discovery_both_blue_and_green_aborts_ambiguous` | Ambiguous blue and green active routes abort fail-closed | **PASS** |
+| 76 | `test_ci_discovery_commented_out_directive_ignored` | Commented-out backend directive is ignored | **PASS** |
+| 77 | `test_ci_discovery_unknown_backend_target_rejected` | Unknown backend target rejected fail-closed | **PASS** |
+| 78 | `test_ci_discovery_ambiguous_upstream_and_direct_proxy_rejected` | Ambiguous upstream and direct proxy routes rejected | **PASS** |
+| 79 | `test_ci_discovery_failed_nginx_t_captures_diagnostics` | Failed nginx -T diagnostics captured and logged with prefix | **PASS** |
+| 80 | `test_ci_discovery_tier3_nginx_t_success_modular_upstream` | Independent Tier 3 nginx -T modular upstream success | **PASS** |
+| 81 | `test_ci_discovery_tier3_nginx_t_failure_emits_diagnostics_and_aborts` | Independent Tier 3 nginx -T failure emits diagnostics and aborts | **PASS** |
+| 82 | `test_ci_discovery_host_mount_provenance_verified_succeeds` | Host bind-mount provenance verified via docker inspect succeeds | **PASS** |
+| 83 | `test_ci_discovery_host_mount_provenance_unverified_skips_host` | Host bind-mount provenance unverified skips host file | **PASS** |
+| 84 | `test_ci_discovery_host_mount_provenance_unverified_and_tier3_fails_aborts` | Host provenance unverified and Tier 3 fails triggers abort | **PASS** |
 
-### 10.3 Platform API & Security Tests (`tests/test_platform.py` — 33 Tests)
+### 10.3 Platform API, Digest Verification & Contract Tests (`tests/test_platform.py` — 68 Tests)
 | # | Test Name | Target / Verification | Result |
 |---|---|---|---|
-| 52 | `test_platform_home` | Platform root UI loads with HTTP 200 | **PASS** |
-| 53 | `test_client_app_demo_route` | `/demo` and `/client-app` render consulting portal | **PASS** |
-| 54 | `test_platform_overview` | `/api/platform/overview` aggregates tools telemetry | **PASS** |
-| 55 | `test_platform_projects_list` | `/api/platform/projects` lists registered projects | **PASS** |
-| 56 | `test_platform_project_details` | `/api/platform/projects/<id>` returns project metadata | **PASS** |
-| 57 | `test_platform_project_not_found` | Nonexistent project returns HTTP 404 | **PASS** |
-| 58 | `test_platform_validate_project` | Project validation endpoint verifies valid payload | **PASS** |
-| 59 | `test_platform_validate_invalid_project` | Invalid project payload returns HTTP 400 | **PASS** |
-| 60 | `test_platform_deployments_list` | `/api/platform/deployments` returns deployment history | **PASS** |
-| 61 | `test_platform_deployments_trigger` | Deployment trigger returns simulated deployment record | **PASS** |
-| 62 | `test_platform_pipelines_list` | `/api/platform/pipelines` returns GitHub Actions runs | **PASS** |
-| 63 | `test_platform_security_status` | `/api/platform/security` returns Trivy and SonarQube data | **PASS** |
-| 64 | `test_platform_monitoring_status` | `/api/platform/monitoring` returns Prometheus/Grafana status | **PASS** |
-| 65 | `test_platform_infrastructure_status` | `/api/platform/infrastructure` returns AWS EC2/VPC data | **PASS** |
-| 66 | `test_platform_environments_list` | `/api/platform/environments` lists Production, Staging, Dev | **PASS** |
-| 67 | `test_platform_rollback_options` | `/api/platform/rollback/options` returns rollback image tags | **PASS** |
-| 68 | `test_platform_diagnostics` | `/api/platform/diagnostics` returns socket check results | **PASS** |
-| 69 | `test_platform_logs` | `/api/platform/logs` returns sanitized audit log lines | **PASS** |
-| 70 | `test_platform_pipeline_honest_trigger` | Pipeline trigger without token returns honest HTTP 400 | **PASS** |
-| 71 | `test_platform_pipeline_stages_mapping` | All 13 CI/CD stages are mapped with correct IDs and names | **PASS** |
-| 72 | `test_platform_infrastructure_environment_separation` | Cleanly separates AWS Cloud from local Docker state | **PASS** |
-| 73 | `test_platform_diagnostics_context_awareness` | Diagnostic engines report environment and check source | **PASS** |
-| 74 | `test_platform_security_policy_wording` | `.trivyignore` CVEs use accurate policy and configuration wording | **PASS** |
-| 75 | `test_platform_security_sonarqube_honest_status` | SonarQube reports real server telemetry without fabricating data | **PASS** |
-| 76 | `test_platform_monitoring_prometheus_states` | Monitoring endpoint returns verified state classification | **PASS** |
-| 77 | `test_dashboard_live_health_indicator` | Frontend contains live health indicator and accessibility attributes | **PASS** |
-| 78 | `test_map_github_workflow_status_matrix` | 100% matrix coverage of GitHub Actions workflow status mapping | **PASS** |
-| 79 | `test_pipeline_endpoint_real_shaped_successful_run` | Structures real GitHub run as PASSED | **PASS** |
-| 80 | `test_pipeline_endpoint_in_progress_never_shows_success` | In-progress workflow run is NEVER presented as PASSED | **PASS** |
-| 81 | `test_pipeline_endpoint_failed_remains_failed` | Failed workflow run remains FAILED and is never coerced | **PASS** |
-| 82 | `test_pipeline_endpoint_cancelled_and_skipped_states` | Cancelled and skipped runs are mapped accurately | **PASS** |
-| 83 | `test_pipeline_endpoint_fallback_and_malformed_responses` | Malformed GitHub API responses do not cause crashes | **PASS** |
-| 84 | `test_pipeline_endpoint_no_credentials_exposed` | GITHUB_TOKEN and Authorization headers are never leaked | **PASS** |
+| 85 | `test_platform_home` | Platform root UI loads with HTTP 200 | **PASS** |
+| 86 | `test_client_app_demo_route` | `/demo` and `/client-app` render consulting portal | **PASS** |
+| 87 | `test_platform_overview` | `/api/platform/overview` aggregates tools telemetry | **PASS** |
+| 88 | `test_platform_projects_list` | `/api/platform/projects` lists registered projects | **PASS** |
+| 89 | `test_platform_project_details` | `/api/platform/projects/<id>` returns project metadata | **PASS** |
+| 90 | `test_platform_project_not_found` | Nonexistent project returns HTTP 404 | **PASS** |
+| 91 | `test_platform_validate_project` | Project validation endpoint verifies valid payload | **PASS** |
+| 92 | `test_platform_validate_invalid_project` | Invalid project payload returns HTTP 400 | **PASS** |
+| 93 | `test_platform_deployments_list` | `/api/platform/deployments` returns deployment history | **PASS** |
+| 94 | `test_platform_deployments_trigger` | Deployment trigger returns simulated deployment record | **PASS** |
+| 95 | `test_platform_pipelines_list` | `/api/platform/pipelines` returns GitHub Actions runs | **PASS** |
+| 96 | `test_platform_security_status` | `/api/platform/security` returns Trivy and SonarQube data | **PASS** |
+| 97 | `test_platform_monitoring_status` | `/api/platform/monitoring` returns Prometheus/Grafana status | **PASS** |
+| 98 | `test_platform_infrastructure_status` | `/api/platform/infrastructure` returns AWS EC2/VPC data | **PASS** |
+| 99 | `test_platform_environments_list` | `/api/platform/environments` lists Production, Staging, Dev | **PASS** |
+| 100 | `test_platform_rollback_options` | `/api/platform/rollback/options` returns rollback image tags | **PASS** |
+| 101 | `test_platform_diagnostics` | `/api/platform/diagnostics` returns socket check results | **PASS** |
+| 102 | `test_platform_logs` | `/api/platform/logs` returns sanitized audit log lines | **PASS** |
+| 103 | `test_platform_pipeline_honest_trigger` | Pipeline trigger without token returns honest HTTP 400 | **PASS** |
+| 104 | `test_platform_pipeline_stages_mapping` | All 14 CI/CD stages are mapped with correct IDs and names | **PASS** |
+| 105 | `test_platform_infrastructure_environment_separation` | Cleanly separates AWS Cloud from local Docker state | **PASS** |
+| 106 | `test_platform_diagnostics_context_awareness` | Diagnostic engines report environment and check source | **PASS** |
+| 107 | `test_platform_security_policy_wording` | Security endpoint accurately reflects Zero Exceptions Policy | **PASS** |
+| 108 | `test_platform_security_sonarqube_honest_status` | SonarQube reports real server telemetry without fabricating data | **PASS** |
+| 109 | `test_platform_monitoring_prometheus_states` | Monitoring endpoint returns verified state classification | **PASS** |
+| 110 | `test_dashboard_live_health_indicator` | Frontend contains live health indicator and accessibility attributes | **PASS** |
+| 111 | `test_map_github_workflow_status_matrix` | 100% matrix coverage of GitHub Actions workflow status mapping | **PASS** |
+| 112 | `test_pipeline_endpoint_real_shaped_successful_run` | Structures real GitHub run as PASSED | **PASS** |
+| 113 | `test_pipeline_endpoint_in_progress_never_shows_success` | In-progress workflow run is NEVER presented as PASSED | **PASS** |
+| 114 | `test_pipeline_endpoint_failed_remains_failed` | Failed workflow run remains FAILED and is never coerced | **PASS** |
+| 115 | `test_pipeline_endpoint_cancelled_and_skipped_states` | Cancelled and skipped runs are mapped accurately | **PASS** |
+| 116 | `test_pipeline_endpoint_fallback_and_malformed_responses` | Malformed GitHub API responses do not cause crashes | **PASS** |
+| 117 | `test_pipeline_endpoint_no_credentials_exposed` | GITHUB_TOKEN and Authorization headers are never leaked | **PASS** |
+| 118 | `test_accurate_normal_ci_run_mapping` | Push-triggered CI runs mapped without false deployment | **PASS** |
+| 119 | `test_failed_ci_run_mapping` | Failed CI push runs mapped honestly | **PASS** |
+| 120 | `test_running_workflow_mapping` | In-progress runs mapped accurately across stages | **PASS** |
+| 121 | `test_successful_production_deployment_mapping` | Workflow dispatch deployment mapped to Production record | **PASS** |
+| 122 | `test_separation_between_ci_run_and_production_deployment` | Normal CI runs distinct from latest deployment | **PASS** |
+| 123 | `test_missing_github_token_handling` | Graceful fallback when GitHub token is unconfigured | **PASS** |
+| 124 | `test_github_api_errors_handling` | API rate limit and HTTP errors handled gracefully | **PASS** |
+| 125 | `test_no_fabricated_success_or_duration` | Missing steps return not-run rather than fake success | **PASS** |
+| 126 | `test_pipelines_endpoint_returns_push_run_with_skipped_deployment` | Pipeline endpoint returns push run with skipped deploy stages | **PASS** |
+| 127 | `test_missing_or_unestablished_step_returns_unknown_or_not_run` | Unestablished steps return unknown status | **PASS** |
+| 128 | `test_sonarqube_actual_quality_gate_passed` | Quality Gate PASSED evaluated honestly from server response | **PASS** |
+| 129 | `test_sonarqube_actual_quality_gate_failed` | Quality Gate FAILED evaluated honestly from server response | **PASS** |
+| 130 | `test_sonarqube_ci_step_failure_distinguished_from_qg_failure` | CI runner step failure distinguished from Quality Gate failure | **PASS** |
+| 131 | `test_sonarqube_pending_running_result` | Pending / running SonarQube tasks mapped to RUNNING | **PASS** |
+| 132 | `test_sonarqube_scanner_success_without_verified_qg` | Scanner success without verified QG reports UNKNOWN | **PASS** |
+| 133 | `test_sonarqube_unknown_or_unavailable_result` | Unreachable SonarQube reports OFFLINE / UNKNOWN | **PASS** |
+| 134 | `test_pipeline_reports_14_canonical_stages` | Verifies all 14 canonical stages including pip-audit | **PASS** |
+| 135 | `test_pip_audit_stage_mapping_from_github_actions` | Accurately maps pip-audit across PASSED, FAILED, RUNNING | **PASS** |
+| 136 | `test_pip_audit_unestablished_step_never_reports_passed` | Unestablished pip-audit step never reports PASSED | **PASS** |
+| 137 | `test_dependency_scanner_clean_and_vulnerable_manifest_evaluation` | Dependency scanner evaluates clean vs vulnerable requirements | **PASS** |
+| 138 | `test_pip_audit_docker_retained_dependency_manifest` | pip-audit verifies Dockerfile-retained dependencies | **PASS** |
+| 139 | `test_trivy_status_combines_filesystem_and_image_scans` | Trivy status combines both filesystem and image scans | **PASS** |
+| 140 | `test_trivy_zero_exceptions_policy_when_ignore_file_deleted` | Zero Exceptions Policy reports 0 active CVE exemptions | **PASS** |
+| 141 | `test_trivy_json_report_parsing` | Parses Trivy JSON report and extracts severity counts | **PASS** |
+| 142 | `test_cyclonedx_sbom_validation` | CycloneDX SBOM generation and JSON schema validation | **PASS** |
+| 143 | `test_image_archive_metadata_and_id_verification` | Verifies image archive tar metadata and ID matching | **PASS** |
+| 144 | `test_ecr_image_digest_validation_and_uri_formatting` | Validates SHA256 digest format and ECR URI resolution | **PASS** |
+| 145 | `test_ci_workflow_single_build_and_digest_deployment_contract` | Verifies single-build promotion contract in workflow | **PASS** |
+| 146 | `test_deploy_script_digest_validation` | deploy_blue_green.sh enforces immutable SHA256 digest | **PASS** |
+| 147 | `test_trivy_checksum_manifest_validation_fail_closed` | Trivy checksum manifest fails closed on mismatch | **PASS** |
+| 148 | `test_production_digest_verification_scenarios` | Production digest verification across matching and mismatching | **PASS** |
+| 149 | `test_ci_workflow_fail_closed_and_exact_digest_contracts` | Workflow enforces fail-closed exact digest deployment | **PASS** |
+| 150 | `test_verify_digest_bash_quoting_and_ssm_payload_validity` | SSM JSON payload quoting and jq script validation | **PASS** |
+| 151 | `test_ci_workflow_modular_route_discovery_and_syntax_validation_contract` | Workflow enforces 4-tier discovery cascade and syntax check | **PASS** |
+| 152 | `test_ci_discovery_extracted_block_anti_drift_contract` | Anti-drift verification between workflow and test harness | **PASS** |
 
 ---
 

@@ -20,16 +20,16 @@ for v in views:
     assert f'id="view-{v}"' in html, f"Missing view panel id=view-{v}"
     print(f"  [OK] Navigation section verified: {v}")
 
-# 2. Check 13 visual pipeline stages via API and dashboard
-print("\n[2] Checking Visual CI/CD 13 Pipeline Stages:")
+# 2. Check 14 visual pipeline stages via API and dashboard
+print("\n[2] Checking Visual CI/CD 14 Pipeline Stages:")
 with urllib.request.urlopen("http://localhost:5000/api/platform/pipelines") as resp:
     pipeline_data = json.loads(resp.read().decode("utf-8"))
     runs = pipeline_data.get("pipeline_runs", [])
     assert len(runs) > 0, "No pipeline runs returned by API"
     stages = runs[0].get("stages", [])
-    assert len(stages) == 13, f"Expected 13 pipeline stages, found {len(stages)}"
+    assert len(stages) == 14, f"Expected 14 pipeline stages, found {len(stages)}"
     expected_stage_ids = [
-        "checkout", "python-check", "deps", "pytest", "sonarqube",
+        "checkout", "python-check", "deps", "pytest", "pip-audit", "sonarqube",
         "trivy-fs", "docker-build", "trivy-image", "aws-config",
         "ecr-login", "ecr-push", "ssm-deploy", "health-check"
     ]
@@ -38,8 +38,8 @@ with urllib.request.urlopen("http://localhost:5000/api/platform/pipelines") as r
     for st in stages:
         print(f"  [OK] Pipeline stage verified: {st.get('id')} - {st.get('name')} ({st.get('status')})")
 
-# 3. Check Security disclosure & whitelist
-print("\n[3] Checking Security Disclosure and .trivyignore Whitelist:")
+# 3. Check Security disclosure & Zero Exceptions Policy
+print("\n[3] Checking Security Disclosure and Zero Exceptions Policy:")
 with urllib.request.urlopen("http://localhost:5000/api/platform/security") as resp:
     sec_data = json.loads(resp.read().decode("utf-8"))
     summary = sec_data.get("vulnerabilities", {}).get("summary_statement", "")
@@ -47,10 +47,8 @@ with urllib.request.urlopen("http://localhost:5000/api/platform/security") as re
     print(f"  [OK] Scan-specific disclosure statement verified: {summary}")
 
     trivy_ignored = sec_data.get("trivy", {}).get("ignored_cves", [])
-    ignored_ids = [item.get("cve_id") for item in trivy_ignored]
-    assert "GHSA-6v7p-g79w-8964" in ignored_ids
-    assert "CVE-2025-47273" in ignored_ids
-    print(f"  [OK] Ignored CVEs (.trivyignore) verified: {ignored_ids}")
+    assert trivy_ignored == [], f"Expected 0 ignored CVEs under Zero Exceptions Policy, got {trivy_ignored}"
+    print(f"  [OK] Zero Exceptions Policy verified: {len(trivy_ignored)} active exceptions")
 
 # 4. Check Demo Application route
 print("\n[4] Checking Standalone Demo Client Application (/demo & /client-app):")

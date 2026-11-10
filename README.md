@@ -89,22 +89,23 @@ flowchart LR
         GH --> S1["1. Checkout Source<br/>actions/checkout@v4"]
         S1 --> S2["2. Check Python<br/>actions/setup-python@v5 (3.12)"]
         S2 --> S3["3. Install Dependencies<br/>pip install requirements, pytest, awscli"]
-        S3 --> S4["4. Run Tests (Pytest)<br/>84 Unit, Platform & Deployment Tests (Blocking)"]
+        S3 --> S4["4. Run Tests (Pytest)<br/>152 Automated Tests (Blocking)"]
 
         subgraph QUALITY_SEC["Code Quality & Vulnerability Scanning"]
             direction TB
-            S4 --> S5["5. SonarQube SAST Analysis<br/>sonarqube:community :9000 & Scanner 7.0.2"]
-            S5 --> S6["6. Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate (Blocking)"]
-            S6 --> S7["7. Build Docker Image<br/>Single-stage python:3.14-alpine"]
-            S7 --> S8["8. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
+            S4 --> S5["5. pip-audit SCA<br/>Python Dependency Vulnerability Scan (Blocking)"]
+            S5 --> S6["6. SonarQube SAST Analysis<br/>sonarqube:community :9000 & Scanner 7.0.2"]
+            S6 --> S7["7. Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate (Blocking)"]
+            S7 --> S8["8. Build Docker Image<br/>Single-stage python:3.14-alpine"]
+            S8 --> S9["9. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
         end
 
-        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4 (OIDC)"]
-        S9 --> S10["10. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
-        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest & :SHA"]
-        S11 --> S12["12. Blue/Green Deploy via SSM<br/>Zero-Downtime Traffic Switch (Zero-SSH)"]
-        S13["13. Application Health Check<br/>curl /health (Independent Verification)"]
-        S12 --> S13
+        S9 --> S10["10. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4 (OIDC)"]
+        S10 --> S11["11. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
+        S11 --> S12["12. Push Image to ECR<br/>devsecops-platform:latest & :SHA"]
+        S12 --> S13["13. Blue/Green Deploy via SSM<br/>Zero-Downtime Traffic Switch (Zero-SSH)"]
+        S14["14. Application Health Check<br/>curl /health (Independent Verification)"]
+        S13 --> S14
     end
 
     %% AREA 3: AWS Production
@@ -148,9 +149,9 @@ flowchart LR
     end
 
     %% Inter-Area Connections
-    S11 -->|Push latest image| ECR
-    S12 -->|Trigger zero-SSH script| SSM_AGENT
-    S13 -->|HTTP GET /health - validates healthy status and live_mysql| P_NGINX
+    S12 -->|Push latest image| ECR
+    S13 -->|Trigger zero-SSH script| SSM_AGENT
+    S14 -->|HTTP GET /health - validates healthy status and live_mysql| P_NGINX
 
     %% End User Access
     USER -->|HTTP Request :80| P_NGINX
@@ -179,36 +180,38 @@ flowchart TD
         A([Pull Request or Push to main]) --> B[Checkout code]
         B --> C[Setup Python 3.12]
         C --> D[Install dependencies]
-        D --> E{Run Pytest\nUnit & Integration}
-        E -->|PASS| F[SonarQube SAST\nAnalysis :9000]
+        D --> E{Run Pytest\n152 Automated Tests}
+        E -->|PASS| F[pip-audit SCA\nDependency Scan]
         E -->|FAIL| Z([Pipeline FAILED])
-        F -->|PASS| G[Trivy Filesystem Scan\nHIGH/CRITICAL Gate]
+        F -->|PASS| G[SonarQube SAST\nAnalysis :9000]
         F -->|FAIL| Z
-        G -->|PASS| H[Build Docker Image\nSingle-stage Alpine]
+        G -->|PASS| H[Trivy Filesystem Scan\nHIGH/CRITICAL Gate]
         G -->|FAIL| Z
-        H --> I[Trivy Image Scan\nHIGH/CRITICAL Gate]
-        I -->|FAIL| Z
-        I -->|PASS| J([CI Validation PASSED])
+        H -->|PASS| I[Build Docker Image\nSingle-stage Alpine]
+        H -->|FAIL| Z
+        I --> J[Trivy Image Scan\nHIGH/CRITICAL Gate]
+        J -->|FAIL| Z
+        J -->|PASS| K([CI Validation PASSED])
     end
 
     subgraph CD["2-4. Continuous Deployment — Manual workflow_dispatch on main only"]
-        K([Manual Dispatch\ndeploy_to_production: true]) --> L[Configure AWS Credentials\nGitHub OIDC Federation]
-        L --> M[Build, Tag & Push to ECR\n:SHA & :latest]
-        M --> N[AWS SSM Blue/Green Deploy\nZero-Downtime Traffic Switch]
-        N --> O[Verify Production Health\nIndependent HTTP Check]
-        O --> P([Production Release SUCCESS])
+        L([Manual Dispatch\ndeploy_to_production: true]) --> M[Configure AWS Credentials\nGitHub OIDC Federation]
+        M --> N[Build, Tag & Push to ECR\n:SHA & :latest]
+        N --> O[AWS SSM Blue/Green Deploy\nZero-Downtime Traffic Switch]
+        O --> P[Verify Production Health\nIndependent HTTP Check]
+        P --> Q([Production Release SUCCESS])
     end
 
-    J -.->|Requires Manual Authorization| K
+    K -.->|Requires Manual Authorization| L
 ```
 
 ### Modular Pipeline Jobs
 
 | Job | Trigger & Conditions | Key Operations & Security Gates |
 |---|---|---|
-| **1. `test-and-scan`** | Pull requests & pushes to `main` | Runs 42 app tests, SonarQube SAST, Trivy filesystem & container CVE scans. Blocking gate. |
-| **2. `publish-ecr`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Assumes AWS OIDC role (`secrets.AWS_ROLE_ARN`). Builds and pushes immutable image tag `${{ github.sha }}` and `latest` to Amazon ECR. |
-| **3. `deploy-blue-green`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Discovers target EC2 instance, checks single-instance guard (`NUM_INSTANCES == 1`), packages and executes `scripts/deploy_blue_green.sh` via SSM. Pre-warms candidate, validates Nginx config sandbox, switches upstream, and auto-rolls back on failure. |
+| **1. `test-and-scan`** | Pull requests & pushes to `main` | Runs 152 automated tests (unit, platform, deployment & rollback), pip-audit SCA, SonarQube SAST, Trivy filesystem & container CVE scans, and CycloneDX SBOM generation. Blocking gate. |
+| **2. `publish-ecr`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Assumes AWS OIDC role (`role-to-assume`). Promotes the verified Docker image from Stage 1 and pushes immutable tag `${{ github.sha }}` and `latest` to Amazon ECR. |
+| **3. `deploy-blue-green`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Discovers target EC2 instance, checks single-instance guard (`NUM_INSTANCES == 1`), executes `scripts/deploy_blue_green.sh` via SSM. 4-tier Nginx route discovery with bind-mount provenance verification, pre-warms candidate, validates Nginx config sandbox, switches upstream, and auto-rolls back on failure. |
 | **4. `verify-production`** | Manual `workflow_dispatch` on `main` only (`deploy_to_production: true`) | Resolves public IP of production EC2 and polls `/health` (asserts `status: healthy`, `connected: true`, `mode: live_mysql`). |
 
 > **Note on Python versions:** The CI runner uses **Python 3.12** (set by `setup-python`) to run tests and SonarQube analysis. The built Docker image uses **`python:3.14-alpine`** as its base, matching local development and production runtime.

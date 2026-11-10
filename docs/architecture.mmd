@@ -34,22 +34,23 @@ flowchart LR
         GH --> S1["1. Checkout Source<br/>actions/checkout@v4"]
         S1 --> S2["2. Check Python<br/>actions/setup-python@v5 (3.12)"]
         S2 --> S3["3. Install Dependencies<br/>pip install requirements, pytest, awscli"]
-        S3 --> S4["4. Run Tests (Pytest)<br/>84 Unit, Platform & Deployment Tests (Blocking)"]
+        S3 --> S4["4. Run Tests (Pytest)<br/>152 Automated Tests (Blocking)"]
 
         subgraph QUALITY_SEC["Code Quality & Vulnerability Scanning"]
             direction TB
-            S4 --> S5["5. SonarQube SAST Analysis<br/>sonarqube:community :9000 & Scanner 7.0.2"]
-            S5 --> S6["6. Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate (Blocking)"]
-            S6 --> S7["7. Build Docker Image<br/>Single-stage python:3.14-alpine"]
-            S7 --> S8["8. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
+            S4 --> S5["5. pip-audit SCA<br/>Python Dependency Vulnerability Scan (Blocking)"]
+            S5 --> S6["6. SonarQube SAST Analysis<br/>sonarqube:community :9000 & Scanner 7.0.2"]
+            S6 --> S7["7. Trivy Filesystem Scan<br/>HIGH / CRITICAL Gate (Blocking)"]
+            S7 --> S8["8. Build Docker Image<br/>Single-stage python:3.14-alpine"]
+            S8 --> S9["9. Scan Docker Image (Trivy)<br/>devsecops-platform:latest (Blocking)"]
         end
 
-        S8 --> S9["9. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4 (OIDC)"]
-        S9 --> S10["10. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
-        S10 --> S11["11. Push Image to ECR<br/>devsecops-platform:latest & :SHA"]
-        S11 --> S12["12. Blue/Green Deploy via SSM<br/>Zero-Downtime Traffic Switch (Zero-SSH)"]
-        S13["13. Application Health Check<br/>curl /health (Independent Verification)"]
-        S12 --> S13
+        S9 --> S10["10. Configure AWS Credentials<br/>aws-actions/configure-aws-credentials@v4 (OIDC)"]
+        S10 --> S11["11. Login to Amazon ECR<br/>aws-actions/amazon-ecr-login@v2"]
+        S11 --> S12["12. Push Image to ECR<br/>devsecops-platform:latest & :SHA"]
+        S12 --> S13["13. Blue/Green Deploy via SSM<br/>Zero-Downtime Traffic Switch (Zero-SSH)"]
+        S14["14. Application Health Check<br/>curl /health (Independent Verification)"]
+        S13 --> S14
     end
 
     %% AREA 3: AWS Production
@@ -93,9 +94,9 @@ flowchart LR
     end
 
     %% Inter-Area Connections
-    S11 -->|Push latest image| ECR
-    S12 -->|Trigger zero-SSH script| SSM_AGENT
-    S13 -->|HTTP GET /health - validates healthy status and live_mysql| P_NGINX
+    S12 -->|Push latest image| ECR
+    S13 -->|Trigger zero-SSH script| SSM_AGENT
+    S14 -->|HTTP GET /health - validates healthy status and live_mysql| P_NGINX
 
     %% End User Access
     USER -->|HTTP Request :80| P_NGINX
