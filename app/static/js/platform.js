@@ -7,6 +7,7 @@
 // Global Platform State
 const PlatformState = {
   activeView: 'dashboard',
+  selectedRunType: 'ci',
   autoRefresh: true,
   refreshInterval: null,
   overview: null,
@@ -177,14 +178,31 @@ async function loadAllTelemetry() {
   ]);
 }
 
+let overviewRequestId = 0;
+let overviewAbortController = null;
+
 async function loadOverview(showLoading = false) {
+  const currentReqId = ++overviewRequestId;
+  const runType = PlatformState.selectedRunType || 'ci';
+  if (overviewAbortController) {
+    try { overviewAbortController.abort(); } catch (_) {}
+  }
+  if (typeof AbortController !== 'undefined') {
+    overviewAbortController = new AbortController();
+  }
   try {
-    const res = await fetch('/api/platform/overview');
+    const res = await fetch(`/api/platform/overview?run_type=${encodeURIComponent(runType)}`, {
+      signal: overviewAbortController ? overviewAbortController.signal : undefined
+    });
     if (!res.ok) throw new Error('Overview fetch failed');
     const data = await res.json();
+    if (currentReqId !== overviewRequestId || runType !== (PlatformState.selectedRunType || 'ci')) {
+      return; // Stale in-flight overview response discarded
+    }
     PlatformState.overview = data;
     renderOverview(data);
   } catch (err) {
+    if (err.name === 'AbortError') return;
     console.error('Error loading overview:', err);
     showToast('Telemetry sync failed: ' + err.message, 'error');
   }
@@ -274,6 +292,8 @@ function renderOverview(data) {
     const runRef = pRun.run_number ? `#${pRun.run_number}` : (pRun.run_id ? pRun.run_id.slice(-6) : '');
     const branchRef = pRun.branch ? ` on ${pRun.branch}` : '';
     const commitRef = pRun.commit_hash ? ` (${pRun.commit_hash})` : '';
+    const isDeploy = (m.selected_run_type === 'deploy' || pRun.event === 'workflow_dispatch');
+    const runLabel = isDeploy ? 'Production Deploy' : 'CI Validation';
     if (pipeStatus === 'PASSED' || pipeStatus === 'SUCCESS') {
       const stages = Array.isArray(pRun.stages) ? pRun.stages : [];
       const passedCount = stages.filter(s => {
@@ -283,20 +303,20 @@ function renderOverview(data) {
       const skippedCount = stages.filter(s => (s.status || '').toUpperCase() === 'SKIPPED').length;
 
       if (stages.length > 0 && skippedCount > 0) {
-        setText('kpi-pipeline-meta', `${passedCount}/${stages.length} stages passed (${skippedCount} skipped)${branchRef}${commitRef}`);
+        setText('kpi-pipeline-meta', `[${runLabel}] ${passedCount}/${stages.length} stages passed (${skippedCount} skipped)${branchRef}${commitRef}`);
       } else if (stages.length > 0) {
-        setText('kpi-pipeline-meta', `All ${stages.length} stages passed${branchRef}${commitRef}`);
+        setText('kpi-pipeline-meta', `[${runLabel}] All ${stages.length} stages passed${branchRef}${commitRef}`);
       } else {
-        setText('kpi-pipeline-meta', `All verification steps completed${branchRef}${commitRef}`);
+        setText('kpi-pipeline-meta', `[${runLabel}] All verification steps completed${branchRef}${commitRef}`);
       }
     } else if (pipeStatus === 'RUNNING') {
-      setText('kpi-pipeline-meta', `Workflow run ${runRef} is currently executing${branchRef}…`);
+      setText('kpi-pipeline-meta', `[${runLabel}] Workflow run ${runRef} is currently executing${branchRef}…`);
     } else if (pipeStatus === 'FAILED') {
-      setText('kpi-pipeline-meta', `Workflow run ${runRef} failed${branchRef}${commitRef}`);
+      setText('kpi-pipeline-meta', `[${runLabel}] Workflow run ${runRef} failed${branchRef}${commitRef}`);
     } else if (pipeStatus === 'CANCELLED') {
-      setText('kpi-pipeline-meta', `Workflow run ${runRef} was cancelled${branchRef}`);
+      setText('kpi-pipeline-meta', `[${runLabel}] Workflow run ${runRef} was cancelled${branchRef}`);
     } else {
-      setText('kpi-pipeline-meta', `Pipeline status: ${pipeStatus}${branchRef}`);
+      setText('kpi-pipeline-meta', `[${runLabel}] Pipeline status: ${pipeStatus}${branchRef}`);
     }
   } else {
     setText('kpi-pipeline-meta', pipeStatus === 'PASSED' ? 'All verification steps completed' : 'Pipeline status from latest run');
@@ -551,26 +571,64 @@ async function triggerDeployment() {
 // Visual CI/CD Pipelines Controller
 // ==============================================================================
 
-let isPipelineFetchInProgress = false;
+function syncPipelineSelectorButtons(selectedType) {
+  const isCi = (selectedType === 'ci');
+  const ciBtnDash = document.getElementById('btn-dashboard-ci');
+  const depBtnDash = document.getElementById('btn-dashboard-deploy');
+  const ciBtnPipe = document.getElementById('btn-pipeview-ci');
+  const depBtnPipe = document.getElementById('btn-pipeview-deploy');
 
-async function loadPipelines() {
-  if (isPipelineFetchInProgress) return;
-  isPipelineFetchInProgress = true;
+  if (ciBtnDash) ciBtnDash.classList.toggle('active', isCi);
+  if (depBtnDash) depBtnDash.classList.toggle('active', !isCi);
+  if (ciBtnPipe) ciBtnPipe.classList.toggle('active', isCi);
+  if (depBtnPipe) depBtnPipe.classList.toggle('active', !isCi);
+}
 
-  let controller = null;
+function switchPipelineRunView(runType) {
+  if (runType !== 'ci' && runType !== 'deploy') {
+    runType = 'ci';
+  }
+  PlatformState.selectedRunType = runType;
+
+  // Immediately synchronize button active states across all views
+  syncPipelineSelectorButtons(runType);
+
+  // Trigger loads with concurrency protection
+  loadPipelines(runType);
+  loadOverview(false);
+}
+window.switchPipelineRunView = switchPipelineRunView;
+
+let pipelineRequestId = 0;
+let pipelineAbortController = null;
+
+async function loadPipelines(runType = null) {
+  if (runType && typeof runType === 'string') {
+    PlatformState.selectedRunType = runType;
+  }
+  const currentRunType = PlatformState.selectedRunType || 'ci';
+  const currentRequestId = ++pipelineRequestId;
+
+  // Ensure button active states match the actively selected run type
+  syncPipelineSelectorButtons(currentRunType);
+
+  // Cancel prior in-flight pipelines request
+  if (pipelineAbortController) {
+    try { pipelineAbortController.abort(); } catch (_) {}
+  }
   let timeoutId = null;
   if (typeof AbortController !== 'undefined') {
-    controller = new AbortController();
+    pipelineAbortController = new AbortController();
     timeoutId = setTimeout(() => {
-      try { controller.abort(); } catch (_) {}
+      try { pipelineAbortController.abort(); } catch (_) {}
     }, 8000);
   }
 
   try {
-    const res = await fetch('/api/platform/pipelines', {
+    const res = await fetch(`/api/platform/pipelines?run_type=${encodeURIComponent(currentRunType)}`, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
-      signal: controller ? controller.signal : undefined
+      signal: pipelineAbortController ? pipelineAbortController.signal : undefined
     });
     if (timeoutId) clearTimeout(timeoutId);
 
@@ -579,9 +637,20 @@ async function loadPipelines() {
     }
 
     const data = await res.json();
+
+    // Concurrency guard: Drop stale response if a newer request was dispatched
+    // or if the selected run type has changed while this request was in flight.
+    if (currentRequestId !== pipelineRequestId || currentRunType !== (PlatformState.selectedRunType || 'ci')) {
+      return;
+    }
+
+    // Ensure buttons remain synchronized
+    syncPipelineSelectorButtons(currentRunType);
+
     const runs = data.pipeline_runs || [];
     const stages = data.stages || [];
     const latestRun = data.latest_run || (runs.length > 0 ? runs[0] : null);
+    const isDeploy = (currentRunType === 'deploy' || data.selected_run_type === 'deploy');
 
     // Update Telemetry Source Badge
     const telemBadge = document.getElementById('pipeline-telemetry-badge');
@@ -611,6 +680,11 @@ async function loadPipelines() {
       const statusBadge = document.getElementById('pipeline-run-status-badge');
       const runLink = document.getElementById('pipeline-run-gh-link');
       const dotEl = document.getElementById('pipeline-run-dot');
+      const runTitleEl = document.getElementById('pipeline-run-title');
+
+      if (runTitleEl) {
+        runTitleEl.textContent = isDeploy ? 'Production Deployment Run' : 'CI Validation Run';
+      }
 
       if (runNumEl) runNumEl.textContent = latestRun.run_number ? `Run #${latestRun.run_number}` : (latestRun.run_id || 'Latest');
       if (branchEl) branchEl.textContent = latestRun.branch || 'main';
@@ -726,11 +800,11 @@ async function loadPipelines() {
         badge.textContent = `Cancelled (${passed}/${stages.length})`;
         badge.className = 'status-badge warning';
       } else if (passed === stages.length) {
-        badge.textContent = `${passed}/${stages.length} Completed`;
+        badge.textContent = isDeploy ? `${passed}/${stages.length} Passed (Production Deploy)` : `${passed}/${stages.length} Completed`;
         badge.className = 'status-badge success';
       } else if (stages.some(s => s.status === 'SKIPPED') && passed > 0 && !failed) {
         const skipped = stages.filter(s => s.status === 'SKIPPED').length;
-        badge.textContent = `${passed}/${stages.length} Passed (${skipped} Skipped)`;
+        badge.textContent = isDeploy ? `${passed}/${stages.length} Passed` : `${passed}/${stages.length} Passed (${skipped} Skipped)`;
         badge.className = 'status-badge success';
       } else {
         badge.textContent = `${passed}/${stages.length} Completed`;
@@ -772,7 +846,29 @@ async function loadPipelines() {
       }).join('');
     }
 
-    // 3. Dashboard mini pipeline preview
+    // 3. Dashboard mini pipeline preview & Selected Run Pill
+    const pillEl = document.getElementById('dashboard-selected-run-pill');
+    if (pillEl) {
+      const targetSummary = isDeploy ? (data.deploy_run || {}) : (data.ci_run || {});
+      const runNum = targetSummary.run_number ? `#${targetSummary.run_number}` : (latestRun?.run_number ? `#${latestRun.run_number}` : '');
+      const passedCount = stages.filter(s => (s.status || '').toUpperCase() === 'PASSED' || (s.status || '').toUpperCase() === 'SUCCESS').length;
+      const skippedCount = stages.filter(s => (s.status || '').toUpperCase() === 'SKIPPED').length;
+
+      if (isDeploy) {
+        const rawSlot = targetSummary.target_slot;
+        const slotDisplay = (rawSlot && rawSlot !== 'unknown' && rawSlot !== 'none') ? rawSlot : 'Unknown';
+        pillEl.textContent = `Production Deploy • ${runNum ? runNum + ' • ' : ''}${passedCount}/${stages.length} Passed • Target: ${slotDisplay}`;
+        pillEl.style.color = 'var(--color-success, #34d399)';
+        pillEl.style.borderColor = 'rgba(52,211,153,0.3)';
+        pillEl.style.background = 'rgba(52,211,153,0.1)';
+      } else {
+        pillEl.textContent = `CI Validation • ${runNum ? runNum + ' • ' : ''}${passedCount}/${stages.length} Passed (${skippedCount} Skipped)`;
+        pillEl.style.color = 'var(--color-brand-light, #38bdf8)';
+        pillEl.style.borderColor = 'rgba(56,189,248,0.25)';
+        pillEl.style.background = 'rgba(56,189,248,0.1)';
+      }
+    }
+
     const dashFlow = document.getElementById('dashboard-pipeline-flow');
     if (dashFlow && stages.length > 0) {
       const groups = [
@@ -854,15 +950,18 @@ async function loadPipelines() {
     }
   } catch (err) {
     if (timeoutId) clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      return; // Request was aborted due to newer user action or timeout
+    }
     console.error('Error loading pipelines:', err);
     showToast('Failed to load CI/CD pipeline data: ' + err.message, 'error');
-  } finally {
-    isPipelineFetchInProgress = false;
   }
 }
 
 function showStageDetails(stageIndex) {
-  fetch('/api/platform/pipelines').then(r => r.json()).then(data => {
+  const currentRunType = PlatformState.selectedRunType || 'ci';
+  fetch(`/api/platform/pipelines?run_type=${encodeURIComponent(currentRunType)}`).then(r => r.json()).then(data => {
+    if (currentRunType !== (PlatformState.selectedRunType || 'ci')) return;
     const stages = data.stages || [];
     const stage = stages[stageIndex];
     if (!stage) return;

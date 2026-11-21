@@ -2926,3 +2926,605 @@ def test_docker_image_digest_verification_contract_and_simulation():
 
     # 10. Anti-regression: Container object directly lacks RepoDigests
     assert "RepoDigests" not in containers["devsecops-app-blue"]
+
+
+# ==============================================================================
+# Dashboard Telemetry Corrections & Dual-Run (CI vs Deploy) Regression Tests
+# ==============================================================================
+
+def test_template_14_stage_verification():
+    """Verify index.html contains 14-stage labels, run selectors, and zero 13-stage references."""
+    import pathlib
+    template_path = pathlib.Path(__file__).resolve().parent.parent / "app" / "templates" / "index.html"
+    with open(template_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # Zero outdated 13-stage references
+    assert "13-stage" not in html.lower(), "Found outdated '13-stage' reference in index.html"
+
+    # Both canonical 14-stage subtitles present
+    assert "14-stage verification pipeline" in html
+    assert "14-stage verification mapped to github actions" in html.lower()
+
+    # Dual-run selectors and pill present
+    assert 'id="dashboard-run-selector"' in html
+    assert 'id="pipeview-run-selector"' in html
+    assert 'id="btn-dashboard-ci"' in html
+    assert 'id="btn-dashboard-deploy"' in html
+    assert 'id="btn-pipeview-ci"' in html
+    assert 'id="btn-pipeview-deploy"' in html
+    assert 'id="dashboard-selected-run-pill"' in html
+
+    # Sidebar runner / engine metadata updated
+    assert "Bash &bull; AWS SSM &bull; Trivy" in html or "Bash • AWS SSM • Trivy" in html
+
+
+def test_api_status_runner_identity():
+    """Verify /api/status returns the correct Ubuntu GitHub-hosted runner identity."""
+    client = app.test_client()
+    res = client.get("/api/status")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["pipeline"]["ci_runner"] == "GitHub-hosted Runner (ubuntu-latest)"
+    assert "Windows Self-Hosted Runner" not in data["pipeline"]["ci_runner"]
+
+
+def test_pipelines_ci_vs_deploy_run_telemetry():
+    """Verify /api/platform/pipelines accurately distinguishes CI validation from Production Deploy."""
+    ci_stages = [
+        {"id": "checkout", "name": "Source Checkout", "status": "PASSED"},
+        {"id": "python-check", "name": "Python Environment", "status": "PASSED"},
+        {"id": "deps", "name": "Dependencies Installation", "status": "PASSED"},
+        {"id": "pytest", "name": "Unit & Integration Tests", "status": "PASSED"},
+        {"id": "pip-audit", "name": "Dependency Vulnerability Scan", "status": "PASSED"},
+        {"id": "sonarqube", "name": "SonarQube Quality Gate", "status": "PASSED"},
+        {"id": "trivy-fs", "name": "Filesystem Vulnerability Scan", "status": "PASSED"},
+        {"id": "docker-build", "name": "Docker Image Build", "status": "PASSED"},
+        {"id": "trivy-image", "name": "Container Image Scan", "status": "PASSED"},
+        {"id": "aws-config", "name": "AWS Authentication", "status": "SKIPPED"},
+        {"id": "ecr-login", "name": "ECR Registry Authentication", "status": "SKIPPED"},
+        {"id": "ecr-push", "name": "ECR Image Push", "status": "SKIPPED"},
+        {"id": "ssm-deploy", "name": "SSM Production Deployment", "status": "SKIPPED"},
+        {"id": "health-check", "name": "Production Health Check", "status": "SKIPPED"},
+    ]
+
+    deploy_stages = [
+        {"id": "checkout", "name": "Source Checkout", "status": "PASSED"},
+        {"id": "python-check", "name": "Python Environment", "status": "PASSED"},
+        {"id": "deps", "name": "Dependencies Installation", "status": "PASSED"},
+        {"id": "pytest", "name": "Unit & Integration Tests", "status": "PASSED"},
+        {"id": "pip-audit", "name": "Dependency Vulnerability Scan", "status": "PASSED"},
+        {"id": "sonarqube", "name": "SonarQube Quality Gate", "status": "PASSED"},
+        {"id": "trivy-fs", "name": "Filesystem Vulnerability Scan", "status": "PASSED"},
+        {"id": "docker-build", "name": "Docker Image Build", "status": "PASSED"},
+        {"id": "trivy-image", "name": "Container Image Scan", "status": "PASSED"},
+        {"id": "aws-config", "name": "AWS Authentication", "status": "PASSED"},
+        {"id": "ecr-login", "name": "ECR Registry Authentication", "status": "PASSED"},
+        {"id": "ecr-push", "name": "ECR Image Push", "status": "PASSED"},
+        {"id": "ssm-deploy", "name": "SSM Production Deployment", "status": "PASSED"},
+        {"id": "health-check", "name": "Production Health Check", "status": "PASSED"},
+    ]
+
+    ci_run_obj = {
+        "id": 44909311545,
+        "run_number": 201,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": "81ad9a23c09303d6123f997010ae366afa5f45c1",
+        "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/44909311545"
+    }
+
+    deploy_run_obj = {
+        "id": 44913389834,
+        "run_number": 202,
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": "81ad9a23c09303d6123f997010ae366afa5f45c1",
+        "html_url": "https://github.com/mohdshahid7033/cloud-devsecops-platform/actions/runs/44913389834"
+    }
+
+    ci_summary = {
+        "run_id": "44909311545",
+        "run_number": 201,
+        "event": "push",
+        "status": "PASSED",
+        "conclusion": "success",
+        "commit_hash": "81ad9a2",
+        "branch": "main",
+        "html_url": ci_run_obj["html_url"]
+    }
+
+    deploy_summary = {
+        "run_id": "44913389834",
+        "run_number": 202,
+        "event": "workflow_dispatch",
+        "status": "PASSED",
+        "conclusion": "success",
+        "commit_hash": "81ad9a2",
+        "branch": "main",
+        "html_url": deploy_run_obj["html_url"],
+        "target_slot": "devsecops-app-blue"
+    }
+
+    def fake_get_pipeline_data(run_id=None):
+        if run_id in ("deploy", "production", "workflow_dispatch", "44913389834"):
+            return {
+                "stages": deploy_stages,
+                "run": deploy_run_obj,
+                "runs": [deploy_run_obj, ci_run_obj],
+                "ci_run": ci_run_obj,
+                "deploy_run": deploy_run_obj,
+                "ci_summary": ci_summary,
+                "deploy_summary": deploy_summary,
+                "selected_run_type": "deploy",
+                "telemetry_source": "github_actions"
+            }
+        else:
+            return {
+                "stages": ci_stages,
+                "run": ci_run_obj,
+                "runs": [ci_run_obj, deploy_run_obj],
+                "ci_run": ci_run_obj,
+                "deploy_run": deploy_run_obj,
+                "ci_summary": ci_summary,
+                "deploy_summary": deploy_summary,
+                "selected_run_type": "ci",
+                "telemetry_source": "github_actions"
+            }
+
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", side_effect=fake_get_pipeline_data):
+        client = app.test_client()
+
+        # 1. CI Validation query
+        res_ci = client.get("/api/platform/pipelines?run_type=ci")
+        assert res_ci.status_code == 200
+        data_ci = res_ci.get_json()
+        assert data_ci["selected_run_type"] == "ci"
+        assert data_ci["ci_run"]["run_number"] == 201
+        passed_ci = sum(1 for s in data_ci["stages"] if s["status"] == "PASSED")
+        skipped_ci = sum(1 for s in data_ci["stages"] if s["status"] == "SKIPPED")
+        assert passed_ci == 9
+        assert skipped_ci == 5
+
+        # 2. Production Deploy query
+        res_deploy = client.get("/api/platform/pipelines?run_type=deploy")
+        assert res_deploy.status_code == 200
+        data_deploy = res_deploy.get_json()
+        assert data_deploy["selected_run_type"] == "deploy"
+        assert data_deploy["deploy_run"]["run_number"] == 202
+        assert data_deploy["deploy_run"]["target_slot"] == "devsecops-app-blue"
+        passed_deploy = sum(1 for s in data_deploy["stages"] if s["status"] == "PASSED")
+        skipped_deploy = sum(1 for s in data_deploy["stages"] if s["status"] == "SKIPPED")
+        assert passed_deploy == 14
+        assert skipped_deploy == 0
+
+
+def test_overview_ci_vs_deploy_run_telemetry():
+    """Verify /api/platform/overview reflects selected run type in latest_pipeline_run."""
+    ci_summary = {
+        "run_id": "44909311545",
+        "run_number": 201,
+        "event": "push",
+        "status": "PASSED"
+    }
+    deploy_summary = {
+        "run_id": "44913389834",
+        "run_number": 202,
+        "event": "workflow_dispatch",
+        "status": "PASSED",
+        "target_slot": "devsecops-app-blue"
+    }
+
+    ci_run_obj = {
+        "id": 44909311545,
+        "run_number": 201,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": "81ad9a23c09303d6123f997010ae366afa5f45c1"
+    }
+
+    deploy_run_obj = {
+        "id": 44913389834,
+        "run_number": 202,
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": "81ad9a23c09303d6123f997010ae366afa5f45c1"
+    }
+
+    def fake_get_pipeline_data(run_id=None):
+        if run_id in ("deploy", "production", "workflow_dispatch", "44913389834"):
+            return {
+                "run": deploy_run_obj,
+                "stages": [{"id": f"s{i}", "status": "PASSED"} for i in range(14)],
+                "ci_summary": ci_summary,
+                "deploy_summary": deploy_summary,
+                "selected_run_type": "deploy"
+            }
+        else:
+            return {
+                "run": ci_run_obj,
+                "stages": [{"id": f"s{i}", "status": "PASSED" if i < 9 else "SKIPPED"} for i in range(14)],
+                "ci_summary": ci_summary,
+                "deploy_summary": deploy_summary,
+                "selected_run_type": "ci"
+            }
+
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", side_effect=fake_get_pipeline_data):
+        client = app.test_client()
+
+        # CI query
+        res_ci = client.get("/api/platform/overview?run_type=ci")
+        assert res_ci.status_code == 200
+        metrics_ci = res_ci.get_json()["metrics"]
+        assert metrics_ci["selected_run_type"] == "ci"
+        assert metrics_ci["ci_run"]["run_number"] == 201
+        assert metrics_ci["deploy_run"]["run_number"] == 202
+        assert metrics_ci["latest_pipeline_run"]["run_number"] == 201
+
+        # Deploy query
+        res_dep = client.get("/api/platform/overview?run_type=deploy")
+        assert res_dep.status_code == 200
+        metrics_dep = res_dep.get_json()["metrics"]
+        assert metrics_dep["selected_run_type"] == "deploy"
+        assert metrics_dep["latest_pipeline_run"]["run_number"] == 202
+
+
+def test_pipelines_fallback_when_github_unavailable():
+    """Verify /api/platform/pipelines and /overview fall back gracefully without 500 error."""
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=None):
+        client = app.test_client()
+
+        res_pipe = client.get("/api/platform/pipelines")
+        assert res_pipe.status_code == 200
+        data_pipe = res_pipe.get_json()
+        assert data_pipe["telemetry_source"] == "database_fallback"
+        assert len(data_pipe["stages"]) == 14
+
+        res_over = client.get("/api/platform/overview")
+        assert res_over.status_code == 200
+        data_over = res_over.get_json()
+        assert "metrics" in data_over
+
+
+def test_target_slot_resolution_blue_green_and_unavailable():
+    """Verify resolve_deployment_target_slot identifies blue, green, and explicit unknown."""
+    from app.platform_service import resolve_deployment_target_slot
+
+    # 1. Explicit property on deploy_run -> blue
+    run_blue = {"id": 1, "target_slot": "devsecops-app-blue"}
+    assert resolve_deployment_target_slot(run_blue) == "devsecops-app-blue"
+
+    # 2. Explicit property on deploy_run -> green
+    run_green = {"id": 2, "candidate_slot": "green"}
+    assert resolve_deployment_target_slot(run_green) == "devsecops-app-green"
+
+    # 3. Job/step title evidence -> blue
+    jobs_blue = [{"name": "Deploy", "steps": [{"name": "Execute SSM deploy to devsecops-app-blue"}]}]
+    assert resolve_deployment_target_slot({"id": 3}, jobs_blue) == "devsecops-app-blue"
+
+    # 4. Job/step title evidence -> green
+    jobs_green = [{"name": "Deploy (green)", "steps": []}]
+    assert resolve_deployment_target_slot({"id": 4}, jobs_green) == "devsecops-app-green"
+
+    # 5. Commit message evidence -> blue
+    run_commit_blue = {"id": 5, "head_commit": {"message": "deploy: target: devsecops-app-blue"}}
+    assert resolve_deployment_target_slot(run_commit_blue) == "devsecops-app-blue"
+
+    # 6. Commit message evidence -> green
+    run_commit_green = {"id": 6, "head_commit": {"message": "deploy: slot: green"}}
+    assert resolve_deployment_target_slot(run_commit_green) == "devsecops-app-green"
+
+    # 7. Unavailable metadata -> returns explicit 'unknown' (never hardcodes blue)
+    run_generic = {
+        "id": 44913389834,
+        "run_number": 202,
+        "event": "workflow_dispatch",
+        "head_commit": {"message": "ci: migrate GitHub Actions to Node.js 24"}
+    }
+    jobs_generic = [
+        {"name": "Blue/Green Deployment", "steps": [{"name": "Execute Blue/Green deployment via SSM"}]},
+        {"name": "Verify Production Deployment & Security", "steps": [{"name": "External HTTP health check"}]}
+    ]
+    with patch.dict("os.environ", {}, clear=True):
+        assert resolve_deployment_target_slot(run_generic, jobs_generic) == "unknown"
+        assert resolve_deployment_target_slot(None, None) == "unknown"
+
+
+def test_target_slot_exhaustive_regression_matrix():
+    """
+    Exhaustive regression test suite verifying safe conflict resolution and strict isolation
+    across all 11 required target-slot telemetry scenarios:
+    1. Explicit blue target
+    2. Explicit green target
+    3. Missing evidence returns unknown
+    4. active_slot alone returns unknown
+    5. Dashboard host APP_ENV=production-blue cannot identify a remote deployment target
+    6. Conflicting commit and job evidence returns unknown
+    7. Conflicting explicit candidate and target evidence returns unknown
+    8. Unambiguous commit-message declarations
+    9. Ambiguous transition commit messages return unknown
+    10. Multiple deployment runs do not exchange target-slot evidence
+    11. API endpoints consistently return unknown when evidence is insufficient
+    """
+    from app.platform_service import resolve_deployment_target_slot
+
+    # 1. Explicit blue target
+    run_blue_1 = {"id": 1, "target_slot": "devsecops-app-blue"}
+    run_blue_2 = {"id": 2, "candidate_slot": "blue"}
+    assert resolve_deployment_target_slot(run_blue_1) == "devsecops-app-blue"
+    assert resolve_deployment_target_slot(run_blue_2) == "devsecops-app-blue"
+
+    # 2. Explicit green target
+    run_green_1 = {"id": 3, "target_slot": "devsecops-app-green"}
+    run_green_2 = {"id": 4, "candidate_slot": "green"}
+    assert resolve_deployment_target_slot(run_green_1) == "devsecops-app-green"
+    assert resolve_deployment_target_slot(run_green_2) == "devsecops-app-green"
+
+    # 3. Missing evidence returns unknown
+    run_empty = {"id": 5}
+    jobs_generic = [
+        {"name": "Blue/Green Deployment", "steps": [{"name": "Execute Blue/Green deployment via SSM"}]},
+        {"name": "Verify Production Deployment & Security", "steps": [{"name": "External HTTP health check"}]}
+    ]
+    assert resolve_deployment_target_slot(None, None) == "unknown"
+    assert resolve_deployment_target_slot(run_empty, None) == "unknown"
+    assert resolve_deployment_target_slot(run_empty, jobs_generic) == "unknown"
+
+    # 4. active_slot alone returns unknown (must not confuse running slot with candidate deployment slot)
+    run_active_blue = {"id": 6, "active_slot": "devsecops-app-blue"}
+    run_active_green = {"id": 7, "active_slot": "devsecops-app-green"}
+    assert resolve_deployment_target_slot(run_active_blue) == "unknown"
+    assert resolve_deployment_target_slot(run_active_green) == "unknown"
+    assert resolve_deployment_target_slot(run_active_blue, jobs_generic) == "unknown"
+
+    # 5. Dashboard host APP_ENV=production-blue cannot identify a remote deployment target
+    with patch.dict("os.environ", {"APP_ENV": "production-blue", "DEPLOYMENT_STATE_FILE": "/nonexistent/state.json"}):
+        assert resolve_deployment_target_slot(run_empty, jobs_generic) == "unknown"
+        assert resolve_deployment_target_slot(None, None) == "unknown"
+
+    # 6. Conflicting commit and job evidence returns unknown
+    run_commit_blue_job_green = {"id": 8, "head_commit": {"message": "deploy: target: devsecops-app-blue"}}
+    jobs_green = [{"name": "Deploy (green)", "steps": []}]
+    assert resolve_deployment_target_slot(run_commit_blue_job_green, jobs_green) == "unknown"
+
+    run_commit_green_job_blue = {"id": 9, "head_commit": {"message": "deploy: target: devsecops-app-green"}}
+    jobs_blue = [{"name": "Deploy", "steps": [{"name": "Execute SSM deploy to devsecops-app-blue"}]}]
+    assert resolve_deployment_target_slot(run_commit_green_job_blue, jobs_blue) == "unknown"
+
+    # 7. Conflicting explicit candidate and target evidence returns unknown
+    run_conflicting_explicit = {"id": 10, "target_slot": "devsecops-app-blue", "candidate_slot": "devsecops-app-green"}
+    assert resolve_deployment_target_slot(run_conflicting_explicit) == "unknown"
+
+    # 8. Unambiguous commit-message declarations
+    assert resolve_deployment_target_slot({"id": 11, "head_commit": {"message": "deploy: target: devsecops-app-blue"}}) == "devsecops-app-blue"
+    assert resolve_deployment_target_slot({"id": 12, "head_commit": {"message": "deploy: slot: green"}}) == "devsecops-app-green"
+    assert resolve_deployment_target_slot({"id": 13, "head_commit": {"message": "deploy to devsecops-app-blue"}}) == "devsecops-app-blue"
+    assert resolve_deployment_target_slot({"id": 14, "head_commit": {"message": "deploy to devsecops-app-green"}}) == "devsecops-app-green"
+
+    # 9. Ambiguous transition commit messages return unknown
+    assert resolve_deployment_target_slot({"id": 15, "head_commit": {"message": "switch from blue to green"}}) == "unknown"
+    assert resolve_deployment_target_slot({"id": 16, "head_commit": {"message": "switch traffic from devsecops-app-blue to devsecops-app-green"}}) == "unknown"
+    assert resolve_deployment_target_slot({"id": 17, "head_commit": {"message": "promote green, retire blue"}}) == "unknown"
+    assert resolve_deployment_target_slot({"id": 18, "head_commit": {"message": "cutover from blue"}}) == "unknown"
+
+    # 10. Multiple deployment runs do not exchange target-slot evidence
+    run_dep_1 = {"id": 101, "target_slot": "devsecops-app-blue"}
+    jobs_dep_1 = [{"name": "Deploy (blue)", "steps": []}]
+    run_dep_2 = {"id": 102}  # has no evidence
+    jobs_dep_2 = [{"name": "Blue/Green Deployment", "steps": [{"name": "Execute Blue/Green deployment via SSM"}]}]
+
+    assert resolve_deployment_target_slot(run_dep_1, jobs_dep_1) == "devsecops-app-blue"
+    assert resolve_deployment_target_slot(run_dep_2, jobs_dep_2) == "unknown"
+
+    # 11. API endpoints consistently return unknown when evidence is insufficient
+    client = app.test_client()
+    fake_deploy_insufficient = {
+        "stages": [{"id": f"s{i}", "status": "PASSED"} for i in range(14)],
+        "run": {"id": 102, "event": "workflow_dispatch"},
+        "runs": [{"id": 102, "event": "workflow_dispatch"}],
+        "ci_run": None,
+        "deploy_run": {"id": 102, "event": "workflow_dispatch", "target_slot": "unknown"},
+        "ci_summary": None,
+        "deploy_summary": {
+            "run_id": "102",
+            "run_number": 202,
+            "event": "workflow_dispatch",
+            "status": "PASSED",
+            "target_slot": "unknown"
+        },
+        "latest_deployment": {
+            "deployment_id": "DEP-102",
+            "target_slot": "unknown"
+        },
+        "selected_run_type": "deploy",
+        "telemetry_source": "github_actions"
+    }
+
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=fake_deploy_insufficient):
+        res_pipe = client.get("/api/platform/pipelines?run_type=deploy")
+        assert res_pipe.status_code == 200
+        assert res_pipe.get_json()["deploy_run"]["target_slot"] == "unknown"
+
+        res_over = client.get("/api/platform/overview?run_type=deploy")
+        assert res_over.status_code == 200
+        assert res_over.get_json()["metrics"]["deploy_run"]["target_slot"] == "unknown"
+        assert res_over.get_json()["metrics"]["latest_deployment"]["target_slot"] == "unknown"
+
+
+def test_pipelines_target_slot_blue_green_and_unknown_endpoints():
+    """Verify endpoint propagates blue, green, and explicit unknown target slots."""
+    def make_fake_deploy(slot_name):
+        return {
+            "stages": [{"id": f"s{i}", "status": "PASSED"} for i in range(14)],
+            "run": {"id": 100, "event": "workflow_dispatch"},
+            "runs": [{"id": 100, "event": "workflow_dispatch"}],
+            "ci_run": None,
+            "deploy_run": {"id": 100, "event": "workflow_dispatch"},
+            "ci_summary": None,
+            "deploy_summary": {
+                "run_id": "100",
+                "run_number": 202,
+                "event": "workflow_dispatch",
+                "status": "PASSED",
+                "target_slot": slot_name
+            },
+            "selected_run_type": "deploy",
+            "telemetry_source": "github_actions"
+        }
+
+    client = app.test_client()
+
+    # Blue target slot
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=make_fake_deploy("devsecops-app-blue")):
+        res = client.get("/api/platform/pipelines?run_type=deploy")
+        assert res.status_code == 200
+        assert res.get_json()["deploy_run"]["target_slot"] == "devsecops-app-blue"
+
+    # Green target slot
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=make_fake_deploy("devsecops-app-green")):
+        res = client.get("/api/platform/pipelines?run_type=deploy")
+        assert res.status_code == 200
+        assert res.get_json()["deploy_run"]["target_slot"] == "devsecops-app-green"
+
+    # Unknown target slot (evidence unavailable)
+    with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", return_value=make_fake_deploy("unknown")):
+        res = client.get("/api/platform/pipelines?run_type=deploy")
+        assert res.status_code == 200
+        assert res.get_json()["deploy_run"]["target_slot"] == "unknown"
+
+
+def test_frontend_concurrency_and_rapid_switching_contract():
+    """Verify rapid switching handling and frontend concurrency protection mechanisms."""
+    client = app.test_client()
+
+    # 1. Rapid interleaved query test across CI and deploy
+    for run_type in ["ci", "deploy", "ci", "deploy", "ci"]:
+        def fake_dispatcher(run_id=None):
+            req_type = "deploy" if run_id in ("deploy", "production", "workflow_dispatch") else "ci"
+            return {
+                "stages": [{"id": "checkout", "status": "PASSED"}],
+                "run": {"id": 1, "event": "workflow_dispatch" if req_type == "deploy" else "push"},
+                "selected_run_type": req_type,
+                "ci_summary": {"run_number": 201},
+                "deploy_summary": {"run_number": 202, "target_slot": "unknown"}
+            }
+
+        with patch("app.platform_routes.platform_service.get_real_github_pipeline_data", side_effect=fake_dispatcher):
+            res = client.get(f"/api/platform/pipelines?run_type={run_type}")
+            assert res.status_code == 200
+            data = res.get_json()
+            assert data["selected_run_type"] == run_type
+
+    # 2. Inspect platform.js source code for concurrency guards and race condition prevention
+    import pathlib
+    js_path = pathlib.Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "platform.js"
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_code = f.read()
+
+    # Monotonic request sequencing counters present
+    assert "pipelineRequestId" in js_code
+    assert "overviewRequestId" in js_code
+
+    # AbortController cancellation present
+    assert "pipelineAbortController" in js_code
+    assert "overviewAbortController" in js_code
+
+    # Stale response guard present
+    assert "currentRequestId !== pipelineRequestId" in js_code
+    assert "currentReqId !== overviewRequestId" in js_code
+
+    # Button synchronizer helper present
+    assert "function syncPipelineSelectorButtons" in js_code
+    assert "syncPipelineSelectorButtons(currentRunType)" in js_code
+
+    # Slot display handles unknown without hardcoded blue fallback
+    assert "slotDisplay" in js_code
+    assert "const slot = targetSummary.target_slot || 'devsecops-app-blue';" not in js_code
+
+
+def test_deployment_state_file_run_id_matching(tmp_path):
+    """
+    Verify deployment state-file run-ID matching contracts:
+    1. Exact matching IDs: state-file evidence is accepted.
+    2. Missing selected-run ID: state-file evidence is ignored.
+    3. Missing state-file deployment ID: state-file evidence is ignored.
+    4. Substring-only match: state-file evidence is ignored.
+    5. Different deployment IDs: state-file evidence is ignored.
+    6. A mismatched state file cannot override valid evidence from the selected run.
+    """
+    from app.platform_service import resolve_deployment_target_slot
+
+    state_file = tmp_path / "deployment_state.json"
+
+    def write_state(data):
+        state_file.write_text(json.dumps(data), encoding="utf-8")
+
+    # 1. Exact matching IDs: state-file evidence is accepted
+    write_state({"deployment_id": "DEP-101", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        # Match integer 101 with DEP-101
+        assert resolve_deployment_target_slot({"id": 101}) == "devsecops-app-green"
+        # Match string DEP-101 with DEP-101
+        assert resolve_deployment_target_slot({"id": "DEP-101"}) == "devsecops-app-green"
+        # Match deployment_id key
+        assert resolve_deployment_target_slot({"deployment_id": "101"}) == "devsecops-app-green"
+
+    # 2. Missing selected-run ID: state-file evidence is ignored
+    write_state({"deployment_id": "DEP-101", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({}) == "unknown"
+        assert resolve_deployment_target_slot({"id": ""}) == "unknown"
+        assert resolve_deployment_target_slot(None) == "unknown"
+
+    # 3. Missing state-file deployment ID: state-file evidence is ignored
+    write_state({"candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+
+    write_state({"deployment_id": "", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+
+    # 4. Substring-only match: state-file evidence is ignored (e.g. 101 vs 1010)
+    write_state({"deployment_id": "DEP-1010", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+
+    write_state({"deployment_id": "DEP-9101", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+
+    write_state({"deployment_id": "101_v2", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+
+    # 5. Different deployment IDs: state-file evidence is ignored
+    write_state({"deployment_id": "DEP-202", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+
+    # 6. A mismatched state file cannot override or conflict with valid evidence from the selected run
+    write_state({"deployment_id": "DEP-202", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        run_with_valid_blue = {"id": 101, "target_slot": "devsecops-app-blue"}
+        assert resolve_deployment_target_slot(run_with_valid_blue) == "devsecops-app-blue"
+
+    # Substring match state file cannot override valid evidence from selected run
+    write_state({"deployment_id": "DEP-1010", "candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        run_with_valid_blue = {"id": 101, "target_slot": "devsecops-app-blue"}
+        assert resolve_deployment_target_slot(run_with_valid_blue) == "devsecops-app-blue"
+
+    # Missing ID state file cannot override valid evidence from selected run
+    write_state({"candidate_slot": "devsecops-app-green"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        run_with_valid_blue = {"id": 101, "target_slot": "devsecops-app-blue"}
+        assert resolve_deployment_target_slot(run_with_valid_blue) == "devsecops-app-blue"

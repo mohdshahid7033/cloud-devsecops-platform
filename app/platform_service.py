@@ -1265,6 +1265,212 @@ def map_github_workflow_status(gh_status, gh_conclusion=None):
     return "UNKNOWN"
 
 
+def _extract_slot_from_text(text, candidates, is_job_or_step=True):
+    """
+    Helper to extract candidate deployment slot from job or step names.
+    Ignores generic job names like 'Blue/Green Deployment' or 'Execute Blue/Green deployment via SSM'.
+    """
+    if not text:
+        return
+
+    text_lower = text.lower().strip()
+
+    # Check for generic blue/green patterns (e.g. "blue/green", "blue-green", "blue or green")
+    is_generic = bool(
+        re.search(r"\bblue\s*[/\\-]\s*green\b", text_lower) or
+        re.search(r"\bblue\s+or\s+green\b", text_lower)
+    )
+
+    has_explicit_blue = bool(
+        re.search(r"(?:target|candidate|deploy\s+to|to)\s*[:\s]+devsecops-app-blue\b", text_lower) or
+        re.search(r"(?:target|candidate|slot)\s*[:\s]+blue\b", text_lower) or
+        re.search(r"\bto\s+blue\b", text_lower) or
+        re.search(r"\(blue\)", text_lower)
+    )
+    has_explicit_green = bool(
+        re.search(r"(?:target|candidate|deploy\s+to|to)\s*[:\s]+devsecops-app-green\b", text_lower) or
+        re.search(r"(?:target|candidate|slot)\s*[:\s]+green\b", text_lower) or
+        re.search(r"\bto\s+green\b", text_lower) or
+        re.search(r"\(green\)", text_lower)
+    )
+
+    if is_generic and not (has_explicit_blue or has_explicit_green):
+        return
+
+    # If both are explicitly mentioned, add both to trigger conflict
+    if has_explicit_blue and has_explicit_green:
+        candidates.add("devsecops-app-blue")
+        candidates.add("devsecops-app-green")
+    elif has_explicit_blue:
+        candidates.add("devsecops-app-blue")
+    elif has_explicit_green:
+        candidates.add("devsecops-app-green")
+    elif not is_generic:
+        has_blue = "devsecops-app-blue" in text_lower or "(blue)" in text_lower
+        has_green = "devsecops-app-green" in text_lower or "(green)" in text_lower
+        if has_blue and has_green:
+            candidates.add("devsecops-app-blue")
+            candidates.add("devsecops-app-green")
+        elif has_blue:
+            candidates.add("devsecops-app-blue")
+        elif has_green:
+            candidates.add("devsecops-app-green")
+
+
+def _extract_slot_from_commit_message(msg, candidates):
+    """
+    Helper to extract candidate deployment slot from commit messages.
+    Requires explicit, unambiguous target declarations.
+    Ambiguous transition messages (e.g. 'switch from blue to green') trigger conflict.
+    """
+    if not msg:
+        return
+
+    msg_lower = msg.lower().strip()
+
+    # Ambiguous / transition detection:
+    has_blue_word = bool(re.search(r"\b(?:devsecops-app-)?blue\b", msg_lower))
+    has_green_word = bool(re.search(r"\b(?:devsecops-app-)?green\b", msg_lower))
+
+    is_transition = bool(
+        (has_blue_word and has_green_word) or
+        re.search(r"\bfrom\s+(?:devsecops-app-)?(?:blue|green)\b", msg_lower) or
+        re.search(r"\b(?:switch|cutover|transition|swap)\s+from\b", msg_lower) or
+        re.search(r"\bblue\s*[/\\-]\s*green\b", msg_lower)
+    )
+
+    if is_transition:
+        # Mark as conflicting/ambiguous so conflict resolution returns 'unknown'
+        candidates.add("devsecops-app-blue")
+        candidates.add("devsecops-app-green")
+        return
+
+    # Explicit, unambiguous target declaration regex
+    blue_target = bool(
+        re.search(r"\b(?:target|candidate|slot)\s*[:=]\s*(?:devsecops-app-)?blue\b", msg_lower) or
+        re.search(r"\b(?:deploy|deploying)\s+to\s+devsecops-app-blue\b", msg_lower) or
+        re.search(r"\btarget\s+slot\s*[:=]?\s*(?:devsecops-app-)?blue\b", msg_lower)
+    )
+    green_target = bool(
+        re.search(r"\b(?:target|candidate|slot)\s*[:=]\s*(?:devsecops-app-)?green\b", msg_lower) or
+        re.search(r"\b(?:deploy|deploying)\s+to\s+devsecops-app-green\b", msg_lower) or
+        re.search(r"\btarget\s+slot\s*[:=]?\s*(?:devsecops-app-)?green\b", msg_lower)
+    )
+
+    if blue_target and green_target:
+        candidates.add("devsecops-app-blue")
+        candidates.add("devsecops-app-green")
+    elif blue_target:
+        candidates.add("devsecops-app-blue")
+    elif green_target:
+        candidates.add("devsecops-app-green")
+
+
+def _normalize_deployment_id(val):
+    """
+    Normalize deployment and run identifiers for exact matching.
+    Strips whitespace, converts to lowercase, and removes optional 'dep-' prefix.
+    Returns empty string if val is empty or None.
+    """
+    if val is None:
+        return ""
+    val_str = str(val).strip().lower()
+    if val_str.startswith("dep-"):
+        val_str = val_str[4:].strip()
+    return val_str
+
+
+def resolve_deployment_target_slot(deploy_run=None, jobs=None):
+    """
+    Extract the actual production target slot (devsecops-app-blue or devsecops-app-green)
+    from deployment metadata, job/step attributes, or explicit declarations associated
+    with the exact selected deployment run.
+    Never hardcodes a slot; returns 'unknown' if reliable evidence is unavailable, ambiguous,
+    or conflicting.
+    Does NOT use active_slot, host APP_ENV, or generic job names as evidence.
+    """
+    if not deploy_run and not jobs:
+        return "unknown"
+
+    candidates = set()
+
+    # 1. Direct explicit property on deploy_run (from database, webhook payload, or test fixture)
+    # NOTE: active_slot is strictly excluded because the active running slot is not the deployment target slot.
+    if isinstance(deploy_run, dict):
+        for key in ("target_slot", "candidate_slot"):
+            val = deploy_run.get(key)
+            if val:
+                val_str = str(val).lower().strip()
+                has_blue = "blue" in val_str
+                has_green = "green" in val_str
+                if has_blue and has_green:
+                    candidates.add("devsecops-app-blue")
+                    candidates.add("devsecops-app-green")
+                elif has_blue:
+                    candidates.add("devsecops-app-blue")
+                elif has_green:
+                    candidates.add("devsecops-app-green")
+
+    # 2. Check jobs and step names / metadata belonging strictly to this run
+    for job in (jobs or []):
+        j_name = str(job.get("name", "")).strip()
+        _extract_slot_from_text(j_name, candidates, is_job_or_step=True)
+
+        for step in job.get("steps", []):
+            s_name = str(step.get("name", "")).strip()
+            _extract_slot_from_text(s_name, candidates, is_job_or_step=True)
+
+    # 3. Check deployment commit message or title if it explicitly declares the target
+    if isinstance(deploy_run, dict):
+        msg = ""
+        head_commit = deploy_run.get("head_commit")
+        if isinstance(head_commit, dict):
+            msg = str(head_commit.get("message", ""))
+        elif isinstance(deploy_run.get("commit_message"), str):
+            msg = deploy_run.get("commit_message")
+        elif isinstance(deploy_run.get("display_title"), str):
+            msg = deploy_run.get("display_title")
+
+        if msg:
+            _extract_slot_from_commit_message(msg, candidates)
+
+    # 4. Check local deployment state file only if explicitly configured and matching this run
+    state_file = os.getenv("DEPLOYMENT_STATE_FILE")
+    if state_file and os.path.isfile(state_file):
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            if isinstance(state, dict) and isinstance(deploy_run, dict):
+                raw_run_id = deploy_run.get("id") or deploy_run.get("deployment_id") or deploy_run.get("run_id")
+                raw_state_id = state.get("deployment_id") or state.get("run_id") or state.get("id")
+                norm_run_id = _normalize_deployment_id(raw_run_id)
+                norm_state_id = _normalize_deployment_id(raw_state_id)
+                # State-file evidence is accepted ONLY when:
+                # 1. Selected deployment run has a non-empty ID.
+                # 2. State file has a non-empty deployment ID.
+                # 3. Both IDs match exactly after appropriate normalization.
+                if norm_run_id and norm_state_id and norm_run_id == norm_state_id:
+                    cand = state.get("candidate_container") or state.get("candidate_slot") or state.get("target_slot")
+                    if cand:
+                        cand_str = str(cand).lower().strip()
+                        has_blue = "blue" in cand_str
+                        has_green = "green" in cand_str
+                        if has_blue and has_green:
+                            candidates.add("devsecops-app-blue")
+                            candidates.add("devsecops-app-green")
+                        elif has_blue:
+                            candidates.add("devsecops-app-blue")
+                        elif has_green:
+                            candidates.add("devsecops-app-green")
+        except Exception:
+            pass
+
+    # 5. Safe conflict resolution
+    if len(candidates) == 1:
+        return candidates.pop()
+    return "unknown"
+
+
 def get_real_github_pipeline_data(run_id=None):
     """
     Fetch pipeline data from real GitHub Actions runs and jobs API with caching.
@@ -1304,33 +1510,45 @@ def get_real_github_pipeline_data(run_id=None):
 
         # 1. Identify the latest normal CI push run
         ci_run = next((r for r in runs if r.get("event") == "push"), None)
-        if not ci_run:
+        if not ci_run and runs:
             ci_run = next((r for r in runs if r.get("event") in ("push", "pull_request")), runs[0])
 
-        # 2. Select the target run for stages & jobs
-        if run_id:
+        # 2. Identify the latest production deployment (workflow_dispatch)
+        deploy_run = next(
+            (r for r in runs if r.get("event") == "workflow_dispatch"),
+            None
+        )
+
+        # 3. Select the target run for stages & jobs
+        if run_id in ("deploy", "production", "workflow_dispatch"):
+            target_run = deploy_run or ci_run
+        elif run_id in ("ci", "push"):
+            target_run = ci_run
+        elif run_id:
             target_run = next((r for r in runs if str(r.get("id")) == str(run_id)), None)
             if not target_run:
                 target_run = ci_run
         else:
             target_run = ci_run
 
-        target_run_id = target_run.get("id")
-        url_jobs = f"https://api.github.com/repos/{repo}/actions/runs/{target_run_id}/jobs"
-        req_jobs = urllib.request.Request(url_jobs, headers=headers)
-        with urllib.request.urlopen(req_jobs, timeout=5) as resp:
-            jobs_data = json.loads(resp.read().decode())
+        target_run_id = target_run.get("id") if target_run else None
+        jobs = []
+        if target_run_id:
+            url_jobs = f"https://api.github.com/repos/{repo}/actions/runs/{target_run_id}/jobs"
+            req_jobs = urllib.request.Request(url_jobs, headers=headers)
+            with urllib.request.urlopen(req_jobs, timeout=5) as resp:
+                jobs_data = json.loads(resp.read().decode())
+            jobs = jobs_data.get("jobs", [])
 
-        jobs = jobs_data.get("jobs", [])
         stages = _map_jobs_to_canonical_stages(jobs)
 
-        # 3. Separately identify the latest production deployment (workflow_dispatch)
+        # 4. Separately identify the latest production deployment (workflow_dispatch)
         latest_deployment = None
-        deploy_run = next(
-            (r for r in runs if r.get("event") == "workflow_dispatch"),
-            None
-        )
+        deploy_jobs = jobs if (target_run and deploy_run and str(target_run.get("id")) == str(deploy_run.get("id"))) else None
+        target_slot = resolve_deployment_target_slot(deploy_run, deploy_jobs) if deploy_run else "unknown"
         if deploy_run:
+            if isinstance(deploy_run, dict):
+                deploy_run["target_slot"] = target_slot
             dep_id = f"DEP-{deploy_run.get('id')}"
             dep_commit = str(deploy_run.get("head_sha", ""))[:7]
             dep_conc = deploy_run.get("conclusion")
@@ -1362,13 +1580,45 @@ def get_real_github_pipeline_data(run_id=None):
                 "duration_seconds": dur,
                 "deployed_by": f"GitHub Actions ({actor})",
                 "target_instance": "i-0fb9dcbeb35b4fdbe",
+                "target_slot": target_slot,
                 "ecr_image": f"850252650249.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform:{dep_commit}"
+            }
+
+        ci_summary = None
+        if ci_run:
+            ci_summary = {
+                "run_id": str(ci_run.get("id")),
+                "run_number": ci_run.get("run_number"),
+                "event": ci_run.get("event"),
+                "status": map_github_workflow_status(ci_run.get("status"), ci_run.get("conclusion")),
+                "conclusion": ci_run.get("conclusion"),
+                "commit_hash": str(ci_run.get("head_sha", ""))[:7] if ci_run.get("head_sha") else "",
+                "branch": ci_run.get("head_branch"),
+                "html_url": ci_run.get("html_url")
+            }
+
+        deploy_summary = None
+        if deploy_run:
+            deploy_summary = {
+                "run_id": str(deploy_run.get("id")),
+                "run_number": deploy_run.get("run_number"),
+                "event": deploy_run.get("event"),
+                "status": map_github_workflow_status(deploy_run.get("status"), deploy_run.get("conclusion")),
+                "conclusion": deploy_run.get("conclusion"),
+                "commit_hash": str(deploy_run.get("head_sha", ""))[:7] if deploy_run.get("head_sha") else "",
+                "branch": deploy_run.get("head_branch"),
+                "html_url": deploy_run.get("html_url"),
+                "target_slot": target_slot
             }
 
         data = {
             "stages": stages,
             "run": target_run,
             "ci_run": ci_run,
+            "deploy_run": deploy_run,
+            "ci_summary": ci_summary,
+            "deploy_summary": deploy_summary,
+            "selected_run_type": "deploy" if (target_run and target_run.get("event") == "workflow_dispatch") else "ci",
             "runs": runs,
             "jobs": jobs,
             "latest_deployment": latest_deployment,

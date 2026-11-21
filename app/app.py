@@ -116,7 +116,7 @@ def api_status():
             "total_records": total_consultations
         },
         "pipeline": {
-            "ci_runner": "Windows Self-Hosted Runner (PowerShell)",
+            "ci_runner": "GitHub-hosted Runner (ubuntu-latest)",
             "test_framework": "pytest",
             "sast_scanner": "SonarQube (SonarScanner CLI)",
             "vulnerability_scanner": "Aqua Security Trivy (OS, Package & Docker Scan)",

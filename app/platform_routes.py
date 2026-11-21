@@ -40,7 +40,8 @@ def get_overview():
     infra_data = platform_service.get_infrastructure_details()
 
     projects = database.get_projects()
-    gh_data = platform_service.get_real_github_pipeline_data()
+    run_id_arg = request.args.get("run_id") or request.args.get("run_type")
+    gh_data = platform_service.get_real_github_pipeline_data(run_id=run_id_arg)
     latest_dep = None
     latest_pipe = None
 
@@ -102,6 +103,9 @@ def get_overview():
             "deployment_status": "Healthy / Live" if latest_dep and latest_dep.get("status") == "SUCCESS" else "Pending",
             "pipeline_status": latest_pipe.get("status", "PENDING") if latest_pipe else "PENDING",
             "latest_pipeline_run": latest_pipe,
+            "ci_run": gh_data.get("ci_summary") if gh_data else None,
+            "deploy_run": gh_data.get("deploy_summary") if gh_data else None,
+            "selected_run_type": "deploy" if (latest_pipe and latest_pipe.get("event") == "workflow_dispatch") else "ci",
             "security_summary": {
                 "status": trivy_data.get("status", "NO DATA") if trivy_data.get("status") != "NO DATA" else "NO DATA",
                 "critical": trivy_data.get("critical_vulnerabilities"),
@@ -360,9 +364,9 @@ def trigger_deployment():
 
 @platform_bp.route("/pipelines", methods=["GET"])
 def get_pipelines():
-    """Retrieve CI/CD pipeline history and real 13-stage verification details."""
+    """Retrieve CI/CD pipeline history and real 14-stage verification details."""
     runs = []
-    run_id_arg = request.args.get("run_id")
+    run_id_arg = request.args.get("run_id") or request.args.get("run_type")
     gh_data = platform_service.get_real_github_pipeline_data(run_id=run_id_arg)
     telemetry_source = "database_fallback"
     latest_run_info = None
@@ -438,6 +442,9 @@ def get_pipelines():
         "pipeline_runs": runs,
         "stages": stages,
         "latest_run": latest_run_info,
+        "ci_run": gh_data.get("ci_summary") if gh_data else None,
+        "deploy_run": gh_data.get("deploy_summary") if gh_data else None,
+        "selected_run_type": "deploy" if (latest_run_info and latest_run_info.get("event") == "workflow_dispatch") else "ci",
         "telemetry_source": telemetry_source,
         "telemetry_message": gh_data.get("error") if gh_data else None,
         "jobs": gh_data.get("jobs", []) if gh_data else [],

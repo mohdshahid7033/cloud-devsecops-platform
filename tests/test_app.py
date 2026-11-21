@@ -47,7 +47,7 @@ def test_api_status():
     assert data["client_name"] == "ABC Free Consultants"
     assert "database" in data
     assert "pipeline" in data
-    assert data["pipeline"]["ci_runner"] == "Windows Self-Hosted Runner (PowerShell)"
+    assert data["pipeline"]["ci_runner"] == "GitHub-hosted Runner (ubuntu-latest)"
     assert data["pipeline"]["sast_scanner"] == "SonarQube (SonarScanner CLI)"
     assert data["pipeline"]["vulnerability_scanner"] == "Aqua Security Trivy (OS, Package & Docker Scan)"
 
