@@ -2600,6 +2600,14 @@ def test_ci_workflow_fail_closed_and_exact_digest_contracts():
     # Standby-resilient active container check
     assert 'docker ps --filter \\"name=^/${ACTIVE_CONT}$\\"' in verify_script
 
+    # Two-tier container image inspection & validation contract
+    assert 'ACTIVE_IMG_ID=$(docker inspect \\"$ACTIVE_CONT\\" --format \\"{{.Image}}\\"' in verify_script
+    assert 'Failed to retrieve Image ID for active container' in verify_script
+    assert '^sha256:[a-f0-9]{64}$' in verify_script
+    assert 'REPO_DIGESTS=$(docker image inspect \\"$ACTIVE_IMG_ID\\" --format \\"{{range .RepoDigests}}{{.}} {{end}}\\"' in verify_script
+    # Anti-regression: direct query of RepoDigests on container object must not exist
+    assert 'docker inspect \\"$ACTIVE_CONT\\" --format \\"{{range .RepoDigests}}' not in verify_script
+
     # Exact digest matching
     assert "MATCH=false" in verify_script
     assert "for ref in $REPO_DIGESTS;" in verify_script
@@ -2751,3 +2759,170 @@ def test_ci_discovery_extracted_block_anti_drift_contract():
     assert "DUMP_MATCHES" in extracted
     assert "docker exec devsecops-nginx nginx -t 2>&1" in extracted
     assert "Running Nginx configuration syntax is verified valid." in extracted
+
+
+def test_docker_image_digest_verification_contract_and_simulation():
+    """
+    Verify the two-tier Docker container->image digest verification model:
+    1. Valid container image ID and matching RepoDigests -> PASS
+    2. Container has no image ID (inspect returns empty) -> FAIL closed
+    3. Container image ID format is malformed -> FAIL closed
+    4. Image object has no RepoDigests -> FAIL closed
+    5. RepoDigests contains multiple entries, one matches expected ref -> PASS
+    6. RepoDigests contains multiple entries, none match expected ref -> FAIL closed
+    7. Repository name mismatch (e.g. wrong account or dockerhub) -> FAIL closed
+    8. SHA256 digest mismatch -> FAIL closed
+    9. Malformed expected digest (not matching ^sha256:[a-f0-9]{64}$) -> FAIL closed
+    10. Anti-regression: querying .RepoDigests directly on container object fails
+    """
+    import re
+
+    def simulate_two_tier_verification(
+        active_container: str,
+        docker_containers: dict[str, dict],
+        docker_images: dict[str, dict],
+        expected_ref: str,
+        expected_digest: str,
+    ) -> bool:
+        digest_pattern = re.compile(r"^sha256:[a-f0-9]{64}$")
+        if not expected_digest or not digest_pattern.match(expected_digest):
+            raise ValueError(f"Invalid or missing expected digest format: {expected_digest}")
+
+        # Step 1: Container inspection for .Image
+        cont_obj = docker_containers.get(active_container)
+        if not cont_obj:
+            raise ValueError(f"Active container '{active_container}' is not running in Docker")
+
+        # ContainerJSON has .Image, but NOT .RepoDigests
+        image_id = cont_obj.get("Image", "")
+        if not image_id:
+            raise ValueError(f"Failed to retrieve Image ID for active container {active_container}")
+
+        image_id_pattern = re.compile(r"^sha256:[a-f0-9]{64}$")
+        if not image_id_pattern.match(image_id):
+            raise ValueError(f"Retrieved image ID format is invalid for container {active_container}: {image_id}")
+
+        # Step 2: Image inspection for .RepoDigests
+        img_obj = docker_images.get(image_id)
+        if not img_obj:
+            raise ValueError(f"Failed to inspect image {image_id}")
+
+        repo_digests = img_obj.get("RepoDigests", [])
+        if not repo_digests:
+            raise ValueError(f"Container {active_container} has no RepoDigests")
+
+        match = any(ref.strip() == expected_ref.strip() for ref in repo_digests)
+        if not match:
+            raise ValueError(f"Exact image reference mismatch: expected {expected_ref}, found {repo_digests}")
+
+        return True
+
+    valid_digest = "sha256:566a399347afaa77a034269ec6e35556a136c285144af4df6fbd9ed8f062f81e"
+    registry = "850252650249.dkr.ecr.ap-south-1.amazonaws.com"
+    repo = "devsecops-platform"
+    expected_ref = f"{registry}/{repo}@{valid_digest}"
+    valid_image_id = "sha256:566a399347afaa77a034269ec6e35556a136c285144af4df6fbd9ed8f062f81e"
+
+    containers = {
+        "devsecops-app-blue": {"Image": valid_image_id, "State": {"Running": True}}
+    }
+    images = {
+        valid_image_id: {
+            "RepoDigests": [
+                f"{registry}/{repo}@{valid_digest}",
+                f"{registry}/{repo}:latest"
+            ]
+        }
+    }
+
+    # 1. Valid exact match -> PASS
+    assert simulate_two_tier_verification(
+        "devsecops-app-blue", containers, images, expected_ref, valid_digest
+    ) is True
+
+    # 2. Container missing Image ID -> FAIL
+    bad_containers_no_img = {"devsecops-app-blue": {"State": {"Running": True}}}
+    with pytest.raises(ValueError, match="Failed to retrieve Image ID"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", bad_containers_no_img, images, expected_ref, valid_digest
+        )
+
+    # 3. Malformed Image ID -> FAIL
+    bad_containers_malformed_img = {"devsecops-app-blue": {"Image": "not-a-valid-sha", "State": {"Running": True}}}
+    with pytest.raises(ValueError, match="Retrieved image ID format is invalid"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", bad_containers_malformed_img, images, expected_ref, valid_digest
+        )
+
+    # 3b. Abbreviated or non-canonical Image ID (lacking sha256: prefix) -> FAIL
+    bad_containers_short_img = {"devsecops-app-blue": {"Image": "566a399347af", "State": {"Running": True}}}
+    with pytest.raises(ValueError, match="Retrieved image ID format is invalid"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", bad_containers_short_img, images, expected_ref, valid_digest
+        )
+
+    bad_containers_raw_hex = {"devsecops-app-blue": {"Image": "566a399347afaa77a034269ec6e35556a136c285144af4df6fbd9ed8f062f81e", "State": {"Running": True}}}
+    with pytest.raises(ValueError, match="Retrieved image ID format is invalid"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", bad_containers_raw_hex, images, expected_ref, valid_digest
+        )
+
+    # 4. Image has empty RepoDigests -> FAIL
+    images_empty_digests = {valid_image_id: {"RepoDigests": []}}
+    with pytest.raises(ValueError, match="has no RepoDigests"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", containers, images_empty_digests, expected_ref, valid_digest
+        )
+
+    # 5. Multiple RepoDigests, matching entry present -> PASS
+    images_multiple = {
+        valid_image_id: {
+            "RepoDigests": [
+                f"mirror.ecr.ap-south-1.amazonaws.com/{repo}@{valid_digest}",
+                expected_ref
+            ]
+        }
+    }
+    assert simulate_two_tier_verification(
+        "devsecops-app-blue", containers, images_multiple, expected_ref, valid_digest
+    ) is True
+
+    # 6. Multiple RepoDigests, none match expected ref -> FAIL
+    images_none_match = {
+        valid_image_id: {
+            "RepoDigests": [
+                f"mirror.ecr.ap-south-1.amazonaws.com/{repo}@{valid_digest}",
+                f"{registry}/{repo}@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            ]
+        }
+    }
+    with pytest.raises(ValueError, match="Exact image reference mismatch"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", containers, images_none_match, expected_ref, valid_digest
+        )
+
+    # 7. Repository name mismatch (e.g. Docker Hub or wrong account) -> FAIL
+    with pytest.raises(ValueError, match="Exact image reference mismatch"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", containers, images,
+            f"111111111111.dkr.ecr.ap-south-1.amazonaws.com/{repo}@{valid_digest}",
+            valid_digest
+        )
+
+    # 8. SHA256 digest mismatch -> FAIL
+    wrong_digest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    with pytest.raises(ValueError, match="Exact image reference mismatch"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", containers, images,
+            f"{registry}/{repo}@{wrong_digest}",
+            wrong_digest
+        )
+
+    # 9. Malformed expected digest -> FAIL
+    with pytest.raises(ValueError, match="Invalid or missing expected digest format"):
+        simulate_two_tier_verification(
+            "devsecops-app-blue", containers, images, expected_ref, "not-a-digest"
+        )
+
+    # 10. Anti-regression: Container object directly lacks RepoDigests
+    assert "RepoDigests" not in containers["devsecops-app-blue"]
