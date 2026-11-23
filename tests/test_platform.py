@@ -1,4 +1,9 @@
 import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
 import pytest
 from unittest.mock import patch
 from app.app import app
@@ -3465,66 +3470,1061 @@ def test_deployment_state_file_run_id_matching(tmp_path):
     state_file = tmp_path / "deployment_state.json"
 
     def write_state(data):
-        state_file.write_text(json.dumps(data), encoding="utf-8")
+        payload = {
+            "schema_version": "1.0",
+            "github_run_id": "101",
+            "deployment_id": "DEP-101",
+            "deployment_status": "verified",
+            "cutover_performed": True,
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green"
+        }
+        payload.update(data)
+        state_file.write_text(json.dumps(payload), encoding="utf-8")
 
     # 1. Exact matching IDs: state-file evidence is accepted
-    write_state({"deployment_id": "DEP-101", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "101"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
-        # Match integer 101 with DEP-101
         assert resolve_deployment_target_slot({"id": 101}) == "devsecops-app-green"
-        # Match string DEP-101 with DEP-101
-        assert resolve_deployment_target_slot({"id": "DEP-101"}) == "devsecops-app-green"
-        # Match deployment_id key
-        assert resolve_deployment_target_slot({"deployment_id": "101"}) == "devsecops-app-green"
+        assert resolve_deployment_target_slot({"id": "101"}) == "devsecops-app-green"
+        # Strictly positive canonical numeric requirement: zero, negative, and leading-zero IDs are rejected
+        assert resolve_deployment_target_slot({"id": 0}) == "unknown"
+        assert resolve_deployment_target_slot({"id": "0"}) == "unknown"
+        assert resolve_deployment_target_slot({"id": "00"}) == "unknown"
+        assert resolve_deployment_target_slot({"id": "00101"}) == "unknown"
+        assert resolve_deployment_target_slot({"id": "01"}) == "unknown"
+        assert resolve_deployment_target_slot({"id": -101}) == "unknown"
+        assert resolve_deployment_target_slot({"id": "-101"}) == "unknown"
+        # Non-numeric, padded, or prefixed IDs are rejected
+        assert resolve_deployment_target_slot({"id": "DEP-101"}) == "unknown"
+        assert resolve_deployment_target_slot({"id": " 101 "}) == "unknown"
+        # When "id" is absent, do not substitute deployment_id or run_id
+        assert resolve_deployment_target_slot({"deployment_id": "101"}) == "unknown"
+        assert resolve_deployment_target_slot({"run_id": "101"}) == "unknown"
+        assert resolve_deployment_target_slot({"deployment_id": 101}) == "unknown"
+        assert resolve_deployment_target_slot({"run_id": 101}) == "unknown"
+
+    # Rejection of zero, negative, leading-zero, and non-numeric state.github_run_id
+    for bad_state_id in [0, "0", "00", "00101", "01", -101, "-101", " 101 ", "DEP-101"]:
+        write_state({"github_run_id": bad_state_id})
+        with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+            assert resolve_deployment_target_slot({"id": 101}) == "unknown"
+            assert resolve_deployment_target_slot({"id": bad_state_id}) == "unknown"
 
     # 2. Missing selected-run ID: state-file evidence is ignored
-    write_state({"deployment_id": "DEP-101", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "101"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({}) == "unknown"
         assert resolve_deployment_target_slot({"id": ""}) == "unknown"
         assert resolve_deployment_target_slot(None) == "unknown"
 
-    # 3. Missing state-file deployment ID: state-file evidence is ignored
-    write_state({"candidate_slot": "devsecops-app-green"})
+    # 3. Missing state-file github_run_id: state-file evidence is ignored
+    write_state({"github_run_id": None})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({"id": 101}) == "unknown"
 
-    write_state({"deployment_id": "", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": ""})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({"id": 101}) == "unknown"
 
     # 4. Substring-only match: state-file evidence is ignored (e.g. 101 vs 1010)
-    write_state({"deployment_id": "DEP-1010", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "1010"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({"id": 101}) == "unknown"
 
-    write_state({"deployment_id": "DEP-9101", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "9101"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({"id": 101}) == "unknown"
 
-    write_state({"deployment_id": "101_v2", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "101_v2"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({"id": 101}) == "unknown"
 
     # 5. Different deployment IDs: state-file evidence is ignored
-    write_state({"deployment_id": "DEP-202", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "202"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         assert resolve_deployment_target_slot({"id": 101}) == "unknown"
 
     # 6. A mismatched state file cannot override or conflict with valid evidence from the selected run
-    write_state({"deployment_id": "DEP-202", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "202"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         run_with_valid_blue = {"id": 101, "target_slot": "devsecops-app-blue"}
         assert resolve_deployment_target_slot(run_with_valid_blue) == "devsecops-app-blue"
 
     # Substring match state file cannot override valid evidence from selected run
-    write_state({"deployment_id": "DEP-1010", "candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": "1010"})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         run_with_valid_blue = {"id": 101, "target_slot": "devsecops-app-blue"}
         assert resolve_deployment_target_slot(run_with_valid_blue) == "devsecops-app-blue"
 
     # Missing ID state file cannot override valid evidence from selected run
-    write_state({"candidate_slot": "devsecops-app-green"})
+    write_state({"github_run_id": ""})
     with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
         run_with_valid_blue = {"id": 101, "target_slot": "devsecops-app-blue"}
         assert resolve_deployment_target_slot(run_with_valid_blue) == "devsecops-app-blue"
+
+
+def test_deployment_state_file_verification_and_schema_rules(tmp_path):
+    """
+    Exhaustive validation of deployment state-file verification contracts, schema rules,
+    primary run-correlation, and directory mount lifecycle:
+    1. Exact numeric GitHub run ID match (green)
+    2. Numeric run ID preservation when image-derived deployment ID is also present
+    3. Missing github_run_id rejection (no fallback to deployment_id)
+    4. Missing schema version rejection
+    5. Unsupported or malformed schema versions rejection
+    6. Exact canonical Blue and Green pairs accepted
+    7. Invalid slot names rejected
+    8. Invalid container names rejected
+    9. Missing slot or container rejected
+    10. Contradictory slot/container pair rejected
+    11. Exact full 40-character SHA match accepted
+    12. Full SHA mismatch rejected
+    13. Short SHA prefix rejected as substitute for full SHA
+    14. Image digest contradiction rejection
+    15. Missing state file produces 'unknown'
+    16. Malformed JSON produces 'unknown'
+    17. Unreadable state file produces 'unknown'
+    18. Intermediate states rejection (candidate_started, cutover_pending, cutover_succeeded, standby_ready)
+    19. Rolled-back state rejection
+    20. Missing cutover confirmation rejection
+    21. CI-only push run isolation
+    22. Historical run mismatch after newer deployment replaces state file
+    23. Filesystem atomic replacement simulation via os.replace() verifying live file-read lookup
+    """
+    from app.platform_service import resolve_deployment_target_slot
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / "deployment_state.json"
+
+    def write_state(data):
+        state_file.write_text(json.dumps(data), encoding="utf-8")
+
+    def write_atomic_state(data):
+        tmp = state_dir / f"deployment_state.json.tmp.{time.time()}"
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(str(tmp), str(state_file))
+
+    # Scenario 1: Exact numeric GitHub run ID match
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "44924745603",
+        "deployment_id": "DEP-44924745603",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 44924745603}) == "devsecops-app-green"
+        assert resolve_deployment_target_slot({"id": "44924745603"}) == "devsecops-app-green"
+
+    # Scenario 2: Numeric run ID preservation when image-derived deployment ID is also present
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "44924745603",
+        "deployment_id": "sha256:665ebbf98e45d6751ef4f4c233d68eecdcd8788853529393299f8d93399638d2",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 44924745603}) == "devsecops-app-green"
+        # Digest must not be accepted as a substitute for numeric run correlation
+        assert resolve_deployment_target_slot({"id": "sha256:665ebbf98e45d6751ef4f4c233d68eecdcd8788853529393299f8d93399638d2"}) == "unknown"
+
+    # Scenario 3: Missing github_run_id rejected (no fallback to deployment_id)
+    write_state({
+        "schema_version": "1.0",
+        "deployment_id": "DEP-204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "",
+        "deployment_id": "DEP-204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 4: Missing schema version rejected
+    write_state({
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 5: Unsupported or malformed schema versions rejected
+    for bad_ver in ["2.0", "0.9", "v1.0", "", 1.0, 12345, None]:
+        write_state({
+            "schema_version": bad_ver,
+            "github_run_id": "204",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "verified"
+        })
+        with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+            assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 6: Exact canonical Blue and Green pairs accepted
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "201",
+        "candidate_slot": "blue",
+        "candidate_container": "devsecops-app-blue",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 201}) == "devsecops-app-blue"
+
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "devsecops-app-green"
+
+    # Scenario 7: Invalid slot names rejected
+    for bad_slot in ["yellow", "green-2", "staging", "prod", "green_slot"]:
+        write_state({
+            "schema_version": "1.0",
+            "github_run_id": "204",
+            "candidate_slot": bad_slot,
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "verified"
+        })
+        with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+            assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 8: Invalid container names rejected
+    for bad_cont in ["devsecops-app", "custom-app-green", "devsecops-app-green-2", "devsecops-app-blue-extra"]:
+        write_state({
+            "schema_version": "1.0",
+            "github_run_id": "204",
+            "candidate_slot": "green",
+            "candidate_container": bad_cont,
+            "cutover_performed": True,
+            "deployment_status": "verified"
+        })
+        with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+            assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 9: Missing slot or container rejected
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 10: Contradictory slot/container pair rejected
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-blue",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 11: Exact full 40-character SHA match accepted
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "commit_sha": "22183eba099a701d9026df9c25b016e13875dc5b",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({
+            "id": 204,
+            "head_sha": "22183eba099a701d9026df9c25b016e13875dc5b"
+        }) == "devsecops-app-green"
+
+    # Scenario 12: Full SHA mismatch rejected
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({
+            "id": 204,
+            "head_sha": "deadbeef00000000000000000000000000000000"
+        }) == "unknown"
+
+    # Scenario 13: Shorter SHA prefix rejected as substitute for full SHA
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({
+            "id": 204,
+            "head_sha": "22183eb"
+        }) == "unknown"
+
+    # Scenario 14: Image digest contradiction rejection
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "image_digest": "sha256:665ebbf98e45d6751ef4f4c233d68eecdcd8788853529393299f8d93399638d2",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204, "image_digest": "sha256:665ebbf98e45d6751ef4f4c233d68eecdcd8788853529393299f8d93399638d2"}) == "devsecops-app-green"
+        assert resolve_deployment_target_slot({"id": 204, "image_digest": "sha256:badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb"}) == "unknown"
+
+    # Scenario 15: Missing state file
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_dir / "nonexistent.json")}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 16: Malformed JSON
+    state_file.write_text("{malformed: json", encoding="utf-8")
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 17: Unreadable state file (mock permission error)
+    write_state({"schema_version": "1.0", "github_run_id": "204", "candidate_slot": "green", "candidate_container": "devsecops-app-green", "cutover_performed": True, "deployment_status": "verified"})
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        with patch("builtins.open", side_effect=PermissionError("Mock Permission Denied")):
+            assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 18: Intermediate states rejected
+    for intermediate_status in ["candidate_started", "cutover_pending", "cutover_succeeded", "standby_ready"]:
+        write_state({
+            "schema_version": "1.0",
+            "github_run_id": "204",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": intermediate_status in ("cutover_succeeded", "standby_ready"),
+            "deployment_status": intermediate_status
+        })
+        with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+            assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 19: Rolled-back state rejection
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": False,
+        "deployment_status": "rolled_back"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 20: Missing cutover confirmation
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": False,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+
+    # Scenario 21: CI-only push run isolation
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "204",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        # Querying CI push run (id 203) does not match production deployment state for 204
+        assert resolve_deployment_target_slot({"id": 203, "event": "push"}) == "unknown"
+
+    # Scenario 22: Historical run mismatch after newer deployment replaces state file
+    write_state({
+        "schema_version": "1.0",
+        "github_run_id": "205",
+        "candidate_slot": "blue",
+        "candidate_container": "devsecops-app-blue",
+        "cutover_performed": True,
+        "deployment_status": "verified"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        # Querying historical run 204 -> state file belongs to 205, so run 204 returns unknown
+        assert resolve_deployment_target_slot({"id": 204}) == "unknown"
+        # Querying current run 205 -> returns devsecops-app-blue
+        assert resolve_deployment_target_slot({"id": 205}) == "devsecops-app-blue"
+
+    # Scenario 23: Filesystem atomic replacement simulation via os.replace()
+    # Note: This verifies live filesystem file-reading behavior without descriptor staleness;
+    # it is a local filesystem simulation, not a Docker container bind mount integration test.
+    write_atomic_state({
+        "schema_version": "1.0",
+        "github_run_id": "206",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": False,
+        "deployment_status": "candidate_started"
+    })
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(state_file)}):
+        assert resolve_deployment_target_slot({"id": 206}) == "unknown"
+
+        write_atomic_state({
+            "schema_version": "1.0",
+            "github_run_id": "206",
+            "candidate_slot": "green",
+            "candidate_container": "devsecops-app-green",
+            "cutover_performed": True,
+            "deployment_status": "verified"
+        })
+        assert resolve_deployment_target_slot({"id": 206}) == "devsecops-app-green"
+
+
+def test_mark_verified_actual_execution_and_preservation(tmp_path):
+    """
+    Direct execution tests for mark_verified() in scripts/deploy_blue_green.sh:
+    - Schema "1.0" is accepted.
+    - Schema "2.0" is rejected.
+    - Missing schema is rejected.
+    - Missing/non-numeric GitHub run ID is rejected.
+    - Non-canonical candidate pair is rejected.
+    - cutover_performed: false is rejected.
+    - candidate_started is rejected.
+    - cutover_pending is rejected.
+    - rolled_back and failed are rejected.
+    - Valid standby_ready state can be marked verified.
+    - Metadata remains intact after successful finalization.
+    - Rejected finalization does not modify the original state file.
+    """
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    if git_bash.exists():
+        bash_bin = str(git_bash)
+    else:
+        bash_bin = shutil.which("bash")
+
+    if not bash_bin or not os.path.exists(bash_bin):
+        pytest.skip("Bash executable not available for script execution test")
+
+    # Verify bash is actually runnable in the current environment (e.g. not blocked by Windows sandbox token limitations)
+    try:
+        probe = subprocess.run([bash_bin, "-c", "exit 0"], capture_output=True, timeout=5)
+        if probe.returncode != 0:
+            pytest.skip(f"Bash executable {bash_bin} cannot execute in current environment (RC: {probe.returncode})")
+    except Exception as e:
+        pytest.skip(f"Bash execution failed during environment probe: {e}")
+
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "scripts" / "deploy_blue_green.sh"
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    def run_mark_verified(target_file, expected_run_id=None):
+        env = os.environ.copy()
+        env["DEPLOYMENT_STATE_FILE"] = target_file.as_posix()
+        cmd = [bash_bin, script_path.as_posix(), "--mark-verified"]
+        if expected_run_id is not None:
+            cmd.append(str(expected_run_id))
+        return subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+    # 1. Failure when state record is missing (must exit non-zero and not create file)
+    missing_state_file = state_dir / "nonexistent_state.json"
+    res_missing = run_mark_verified(missing_state_file, expected_run_id="44924745603")
+    assert res_missing.returncode != 0
+    assert not missing_state_file.exists()
+
+    # 2. Failure when state record is malformed (must exit non-zero and not fabricate verified record)
+    malformed_state_file = state_dir / "malformed_state.json"
+    malformed_content = "{corrupt json"
+    malformed_state_file.write_text(malformed_content, encoding="utf-8")
+    original_malformed_bytes = malformed_state_file.read_bytes()
+    res_malformed = run_mark_verified(malformed_state_file, expected_run_id="44924745603")
+    assert res_malformed.returncode != 0
+    assert malformed_state_file.read_bytes() == original_malformed_bytes
+
+    # Base payload for invalid state tests
+    base_payload = {
+        "schema_version": "1.0",
+        "github_run_id": "44924745603",
+        "deployment_id": "DEP-44924745603",
+        "commit_sha": "22183eba099a701d9026df9c25b016e13875dc5b",
+        "image_digest": "sha256:665ebbf98e45d6751ef4f4c233d68eecdcd8788853529393299f8d93399638d2",
+        "previous_slot": "blue",
+        "previous_container": "devsecops-app-blue",
+        "candidate_slot": "green",
+        "candidate_container": "devsecops-app-green",
+        "cutover_performed": True,
+        "deployment_status": "standby_ready",
+        "timestamp": "2026-11-22T08:00:00Z"
+    }
+
+    # 3. Missing schema is rejected and original file unmodified
+    no_schema_file = state_dir / "no_schema.json"
+    no_schema_payload = dict(base_payload)
+    del no_schema_payload["schema_version"]
+    no_schema_content = json.dumps(no_schema_payload)
+    no_schema_file.write_text(no_schema_content, encoding="utf-8")
+    original_no_schema_bytes = no_schema_file.read_bytes()
+    res = run_mark_verified(no_schema_file, expected_run_id="44924745603")
+    assert res.returncode != 0
+    assert no_schema_file.read_bytes() == original_no_schema_bytes
+
+    # 4. Schema "2.0" is rejected and original file unmodified
+    schema_2_file = state_dir / "schema_2.json"
+    schema_2_payload = dict(base_payload, schema_version="2.0")
+    schema_2_content = json.dumps(schema_2_payload)
+    schema_2_file.write_text(schema_2_content, encoding="utf-8")
+    original_schema_2_bytes = schema_2_file.read_bytes()
+    res = run_mark_verified(schema_2_file, expected_run_id="44924745603")
+    assert res.returncode != 0
+    assert schema_2_file.read_bytes() == original_schema_2_bytes
+
+    # 5. Missing / non-numeric / non-positive / leading-zero GitHub run ID in state file is rejected and original file unmodified
+    for idx, bad_run_id in enumerate(["", "0", "00", "00101", "01", "000", "0044924745603", "-1", "-44924745603", " 44924745603", "44924745603 ", "not_numeric", "DEP-44924745603", "449247abc"]):
+        bad_run_file = state_dir / f"bad_run_{idx}.json"
+        bad_run_payload = dict(base_payload, github_run_id=bad_run_id)
+        bad_run_content = json.dumps(bad_run_payload)
+        bad_run_file.write_text(bad_run_content, encoding="utf-8")
+        original_bad_run_bytes = bad_run_file.read_bytes()
+        res = run_mark_verified(bad_run_file, expected_run_id="44924745603")
+        assert res.returncode != 0
+        assert bad_run_file.read_bytes() == original_bad_run_bytes
+
+    # 6. Run ID bound finalization checks on valid state file:
+    # State has github_run_id: "44924745603"
+    run_bound_file = state_dir / "run_bound_state.json"
+    run_bound_file.write_text(json.dumps(base_payload), encoding="utf-8")
+    original_run_bound_bytes = run_bound_file.read_bytes()
+
+    # 6a. Missing expected run ID (no CLI arg or env passed) is rejected and state unchanged
+    res_no_arg = run_mark_verified(run_bound_file, expected_run_id=None)
+    assert res_no_arg.returncode != 0
+    assert run_bound_file.read_bytes() == original_run_bound_bytes
+    assert "expected workflow run ID" in res_no_arg.stderr and "is missing" in res_no_arg.stderr
+
+    # 6b. Different expected run ID is rejected and state unchanged
+    res_mismatch = run_mark_verified(run_bound_file, expected_run_id="99999999999")
+    assert res_mismatch.returncode != 0
+    assert run_bound_file.read_bytes() == original_run_bound_bytes
+    assert "does not match state file github_run_id" in res_mismatch.stderr
+
+    # 6c. Zero, negative, leading-zero, and non-numeric expected run IDs are rejected and state unchanged
+    for bad_expected_id in ["0", "00", "00101", "01", "000", "0044924745603", "-1", "-44924745603", "DEP-44924745603", "449247abc", " 44924745603 ", "not_numeric"]:
+        res_bad_expected = run_mark_verified(run_bound_file, expected_run_id=bad_expected_id)
+        assert res_bad_expected.returncode != 0
+        assert run_bound_file.read_bytes() == original_run_bound_bytes
+
+    # 7. Non-canonical candidate pair is rejected and original file unmodified
+    non_canonical_file = state_dir / "non_canonical.json"
+    non_canonical_payload = dict(base_payload, candidate_slot="green", candidate_container="devsecops-app-blue")
+    non_canonical_content = json.dumps(non_canonical_payload)
+    non_canonical_file.write_text(non_canonical_content, encoding="utf-8")
+    original_non_canonical_bytes = non_canonical_file.read_bytes()
+    res = run_mark_verified(non_canonical_file, expected_run_id="44924745603")
+    assert res.returncode != 0
+    assert non_canonical_file.read_bytes() == original_non_canonical_bytes
+
+    # 8. cutover_performed: false is rejected and original file unmodified
+    cutover_false_file = state_dir / "cutover_false.json"
+    cutover_false_payload = dict(base_payload, cutover_performed=False)
+    cutover_false_content = json.dumps(cutover_false_payload)
+    cutover_false_file.write_text(cutover_false_content, encoding="utf-8")
+    original_cutover_false_bytes = cutover_false_file.read_bytes()
+    res = run_mark_verified(cutover_false_file, expected_run_id="44924745603")
+    assert res.returncode != 0
+    assert cutover_false_file.read_bytes() == original_cutover_false_bytes
+
+    # 9. Unpermitted intermediate and failure states are rejected and original files unmodified:
+    # candidate_started, cutover_pending, rolled_back, failed
+    for bad_status in ["candidate_started", "cutover_pending", "rolled_back", "failed"]:
+        bad_status_file = state_dir / f"bad_status_{bad_status}.json"
+        bad_status_payload = dict(base_payload, deployment_status=bad_status)
+        bad_status_content = json.dumps(bad_status_payload)
+        bad_status_file.write_text(bad_status_content, encoding="utf-8")
+        original_bad_status_bytes = bad_status_file.read_bytes()
+        res = run_mark_verified(bad_status_file, expected_run_id="44924745603")
+        assert res.returncode != 0
+        assert bad_status_file.read_bytes() == original_bad_status_bytes
+
+    # 10. Valid standby_ready state with matching expected run ID is accepted and finalized
+    valid_state_file = state_dir / "deployment_state.json"
+    valid_state_file.write_text(json.dumps(base_payload), encoding="utf-8")
+    res_valid = run_mark_verified(valid_state_file, expected_run_id="44924745603")
+    assert res_valid.returncode == 0
+    assert "Deployment state successfully marked as verified." in res_valid.stdout
+
+    # 11. Metadata remains intact after successful finalization
+    updated_state = json.loads(valid_state_file.read_text(encoding="utf-8"))
+    assert updated_state["schema_version"] == "1.0"
+    assert updated_state["github_run_id"] == "44924745603"
+    assert updated_state["deployment_id"] == "DEP-44924745603"
+    assert updated_state["commit_sha"] == "22183eba099a701d9026df9c25b016e13875dc5b"
+    assert updated_state["image_digest"] == "sha256:665ebbf98e45d6751ef4f4c233d68eecdcd8788853529393299f8d93399638d2"
+    assert updated_state["previous_slot"] == "blue"
+    assert updated_state["previous_container"] == "devsecops-app-blue"
+    assert updated_state["candidate_slot"] == "green"
+    assert updated_state["candidate_container"] == "devsecops-app-green"
+    assert updated_state["cutover_performed"] is True
+    assert updated_state["deployment_status"] == "verified"
+    assert "timestamp" in updated_state
+
+    # 12. Dashboard target resolution confirms green resolution
+    from app.platform_service import resolve_deployment_target_slot
+    with patch.dict("os.environ", {"DEPLOYMENT_STATE_FILE": str(valid_state_file)}):
+        assert resolve_deployment_target_slot({"id": 44924745603}) == "devsecops-app-green"
+
+
+def test_ci_workflow_finalization_failure_visibility(tmp_path):
+    """
+    Verifies that the workflow's SSM finalization step:
+    1. Does not suppress errors using || true.
+    2. Validates command dispatch, waits for completion, and checks status/exit code.
+    3. Fails when SSM command status is not Success or ResponseCode != 0.
+    """
+    import yaml
+    repo_root = Path(__file__).resolve().parent.parent
+    ci_file = repo_root / ".github" / "workflows" / "ci.yml"
+    with open(ci_file, "r", encoding="utf-8") as f:
+        ci_yaml = yaml.safe_load(f)
+
+    verify_job = ci_yaml.get("jobs", {}).get("verify-production", {})
+    steps = verify_job.get("steps", [])
+
+    finalize_step = None
+    for step in steps:
+        if step.get("name") == "Finalize successful production deployment":
+            finalize_step = step
+            break
+
+    assert finalize_step is not None, "Finalize successful production deployment step must exist"
+    assert finalize_step.get("if") == "success()", "Must only run if preceding verification steps succeed"
+    assert finalize_step.get("env", {}).get("WORKFLOW_RUN_ID") == "${{ github.run_id }}", "Must pass ${{ github.run_id }} in step env"
+
+    run_script = finalize_step.get("run", "")
+    assert "|| true" not in run_script, "Finalization step must not suppress errors with || true"
+    assert "RC_TYPE" in run_script, "Finalization step must check RC_TYPE"
+    assert "RC_VALUE" in run_script, "Finalization step must check RC_VALUE"
+    assert '"$RC_TYPE" != "number"' in run_script, "Must require ResponseCode to have JSON number type"
+    assert 'case "$RC_VALUE" in' in run_script, "Must use strict case matching for RC_VALUE"
+    assert "STATUS" in run_script, "Finalization step must check Status"
+    assert 'deploy_blue_green.sh --mark-verified " + $run_id' in run_script, "Must pass run_id to deploy_blue_green.sh --mark-verified"
+    assert '0)' in run_script, "Must match 0 as success"
+    assert 'case "$WORKFLOW_RUN_ID" in' in run_script, "Must validate WORKFLOW_RUN_ID before dispatch"
+    assert '[1-9]*)' in run_script, "Must enforce strictly positive canonical decimal run ID"
+
+    # Verify extracted remote command payload structure
+    import re
+    cmd_match = re.search(r'"commands":\s*\[(.*?)\]', run_script)
+    assert cmd_match is not None, "commands parameter array must exist in finalization payload"
+    assert 'deploy_blue_green.sh --mark-verified " + $run_id' in cmd_match.group(1)
+
+    # Behavior test: execute finalization validation logic with simulated SSM outcomes
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    if git_bash.exists():
+        bash_bin = str(git_bash)
+    else:
+        bash_bin = shutil.which("bash")
+
+    if not bash_bin or not os.path.exists(bash_bin):
+        pytest.skip("Bash executable not available")
+
+    try:
+        probe = subprocess.run([bash_bin, "-c", "exit 0"], capture_output=True, timeout=5)
+        if probe.returncode != 0:
+            pytest.skip("Bash executable cannot execute in current environment")
+    except Exception:
+        pytest.skip("Bash probe failed")
+
+    # Reusable validator script template reflecting ci.yml fail-closed logic
+    validator_script = """#!/usr/bin/env bash
+set -euo pipefail
+if [ -z "${TEST_WORKFLOW_RUN_ID+x}" ]; then
+    WORKFLOW_RUN_ID="44924745603"
+else
+    WORKFLOW_RUN_ID="$TEST_WORKFLOW_RUN_ID"
+fi
+STATUS="${TEST_STATUS:-Success}"
+INVOCATION_JSON="${TEST_INVOCATION_JSON:-}"
+
+case "$WORKFLOW_RUN_ID" in
+    [1-9]*)
+        case "$WORKFLOW_RUN_ID" in
+            *[!0-9]*)
+                echo "ERROR: WORKFLOW_RUN_ID contains non-numeric characters: '$WORKFLOW_RUN_ID'" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        echo "ERROR: WORKFLOW_RUN_ID is not a strictly positive canonical decimal run ID: '$WORKFLOW_RUN_ID'" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$STATUS" != "Success" ]; then
+    echo "ERROR: SSM Finalization failed with status: ${STATUS:-Unknown}" >&2
+    exit 1
+fi
+
+if [ -z "$INVOCATION_JSON" ]; then
+    echo "ERROR: Failed to retrieve SSM command invocation details (invocation JSON was empty)." >&2
+    exit 1
+fi
+
+if ! echo "$INVOCATION_JSON" | python -c 'import sys, json; json.load(sys.stdin)' >/dev/null 2>&1; then
+    echo "ERROR: SSM invocation output is not valid JSON." >&2
+    exit 1
+fi
+
+RC_TYPE=$(echo "$INVOCATION_JSON" | python -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if "ResponseCode" not in d:
+        print("missing")
+    elif d["ResponseCode"] is None:
+        print("null")
+    elif isinstance(d["ResponseCode"], bool):
+        print("boolean")
+    elif isinstance(d["ResponseCode"], (int, float)):
+        print("number")
+    elif isinstance(d["ResponseCode"], str):
+        print("string")
+    else:
+        print("unknown")
+except Exception:
+    print("missing")
+' 2>/dev/null || echo "missing")
+
+RC_VALUE=$(echo "$INVOCATION_JSON" | python -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    rc = d.get("ResponseCode")
+    if rc is not None:
+        print(str(rc))
+    else:
+        print("")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")
+
+if [ "$RC_TYPE" = "missing" ]; then
+    echo "ERROR: SSM command invocation is missing ResponseCode field." >&2
+    exit 1
+fi
+
+if [ "$RC_TYPE" != "number" ]; then
+    echo "ERROR: SSM command invocation ResponseCode is not a numeric type (type: '$RC_TYPE', value: '$RC_VALUE')." >&2
+    exit 1
+fi
+
+case "$RC_VALUE" in
+    0)
+        echo "SSM finalization command succeeded with exit code 0."
+        ;;
+    *)
+        echo "ERROR: SSM finalization command exited with non-zero or non-integer code: $RC_VALUE" >&2
+        exit 1
+        ;;
+esac
+
+echo "Production deployment and verification completed successfully!"
+"""
+
+    sim_sh = tmp_path / "sim_finalize.sh"
+    sim_sh.write_text(validator_script, encoding="utf-8")
+
+    def run_sim(env_vars):
+        env = os.environ.copy()
+        env.update(env_vars)
+        return subprocess.run([bash_bin, sim_sh.as_posix()], env=env, capture_output=True, text=True)
+
+    # 1. Non-zero response code failure
+    res_1 = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": 1}'})
+    assert res_1.returncode != 0
+    assert "SSM finalization command exited with non-zero or non-integer code: 1" in res_1.stderr
+
+    # Negative response code failure
+    res_neg = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": -1}'})
+    assert res_neg.returncode != 0
+    assert "SSM finalization command exited with non-zero or non-integer code: -1" in res_neg.stderr
+
+    # Fractional response code failure
+    res_frac = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": 0.5}'})
+    assert res_frac.returncode != 0
+    assert "SSM finalization command exited with non-zero or non-integer code: 0.5" in res_frac.stderr
+
+    # 2. String "0" response code failure (MUST fail because type is string, not number)
+    res_str0 = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": "0"}'})
+    assert res_str0.returncode != 0
+    assert "not a numeric type" in res_str0.stderr
+
+    # Null response code failure
+    res_null = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": null}'})
+    assert res_null.returncode != 0
+    assert "not a numeric type" in res_null.stderr
+
+    # 3. Failed / non-Success status failure
+    for bad_status in ["Failed", "TimedOut", "Cancelled"]:
+        res_status = run_sim({"TEST_STATUS": bad_status, "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": 0}'})
+        assert res_status.returncode != 0
+        assert f"SSM Finalization failed with status: {bad_status}" in res_status.stderr
+
+    # 4. Empty invocation JSON failure
+    res_empty = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": ""})
+    assert res_empty.returncode != 0
+    assert "invocation JSON was empty" in res_empty.stderr
+
+    # 5. Malformed invocation JSON failure
+    res_corrupt = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": "{corrupt json"})
+    assert res_corrupt.returncode != 0
+    assert "SSM invocation output is not valid JSON" in res_corrupt.stderr
+
+    # 6. Missing ResponseCode field failure
+    res_missing = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success"}'})
+    assert res_missing.returncode != 0
+    assert "missing ResponseCode field" in res_missing.stderr
+
+    # 7. Malformed / non-numeric ResponseCode failure
+    for bad_rc in ["error", "None", " 0 "]:
+        res_bad = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": json.dumps({"Status": "Success", "ResponseCode": bad_rc})})
+        assert res_bad.returncode != 0
+        assert "not a numeric type" in res_bad.stderr
+
+    # 8. Valid success with strict numeric zero ResponseCode
+    res_valid = run_sim({"TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": 0}'})
+    assert res_valid.returncode == 0
+    assert "Production deployment and verification completed successfully!" in res_valid.stdout
+
+    # 9. Workflow run ID pre-validation failures: missing, zero, negative, leading-zero, non-numeric
+    for bad_wid in ["", "0", "00", "00101", "01", "-1", " 44924745603 ", "DEP-44924745603", "449247abc"]:
+        res_wid = run_sim({"TEST_WORKFLOW_RUN_ID": bad_wid, "TEST_STATUS": "Success", "TEST_INVOCATION_JSON": '{"Status": "Success", "ResponseCode": 0}'})
+        assert res_wid.returncode != 0
+        assert "WORKFLOW_RUN_ID" in res_wid.stderr
+
+
+def test_deploy_blue_green_container_mounts_and_positive_run_id(tmp_path):
+    """
+    Verifies that:
+    1. Both Blue and Green container creation paths receive -v "${STATE_DIR}:${STATE_DIR}:ro"
+       and -e DEPLOYMENT_STATE_FILE="$DEPLOYMENT_STATE_FILE".
+    2. No writable mounts are added.
+    3. Strictly positive numeric run ID logic in bash rejects 0, negatives, and non-numeric strings.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    script_file = repo_root / "scripts" / "deploy_blue_green.sh"
+    script_content = script_file.read_text(encoding="utf-8")
+
+    # 1. Verify container startup volume mount and environment variable
+    assert '-v "${STATE_DIR}:${STATE_DIR}:ro"' in script_content
+    assert '-e DEPLOYMENT_STATE_FILE="$DEPLOYMENT_STATE_FILE"' in script_content
+    assert ':rw' not in script_content
+
+    # 2. Verify both blue and green slots use this container creation block
+    assert 'ACTIVE_SLOT="blue"' in script_content
+    assert 'CANDIDATE_SLOT="green"' in script_content
+    assert 'ACTIVE_SLOT="green"' in script_content
+    assert 'CANDIDATE_SLOT="blue"' in script_content
+
+    # 3. Behavior test: evaluate strictly positive run ID bash parsing
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    if git_bash.exists():
+        bash_bin = str(git_bash)
+    else:
+        bash_bin = shutil.which("bash")
+
+    if not bash_bin or not os.path.exists(bash_bin):
+        pytest.skip("Bash executable not available")
+
+    try:
+        probe = subprocess.run([bash_bin, "-c", "exit 0"], capture_output=True, timeout=5)
+        if probe.returncode != 0:
+            pytest.skip("Bash executable cannot execute in current environment")
+    except Exception:
+        pytest.skip("Bash probe failed")
+
+    test_parse_sh = tmp_path / "test_parse_run_id.sh"
+    test_parse_sh.write_text("""#!/usr/bin/env bash
+set -euo pipefail
+
+validate_run_id() {
+    local val="$1"
+    case "$val" in
+        [1-9]*)
+            case "$val" in
+                *[!0-9]*)
+                    echo "INVALID"
+                    return 1
+                    ;;
+            esac
+            ;;
+        *)
+            echo "NON_CANONICAL"
+            return 1
+            ;;
+    esac
+    echo "VALID:$val"
+    return 0
+}
+
+# Negative tests
+! validate_run_id "" >/dev/null 2>&1 || exit 1
+! validate_run_id "0" >/dev/null 2>&1 || exit 1
+! validate_run_id "00" >/dev/null 2>&1 || exit 1
+! validate_run_id "00101" >/dev/null 2>&1 || exit 1
+! validate_run_id "01" >/dev/null 2>&1 || exit 1
+! validate_run_id "000" >/dev/null 2>&1 || exit 1
+! validate_run_id "-1" >/dev/null 2>&1 || exit 1
+! validate_run_id "DEP-101" >/dev/null 2>&1 || exit 1
+! validate_run_id " 101 " >/dev/null 2>&1 || exit 1
+! validate_run_id "101abc" >/dev/null 2>&1 || exit 1
+
+# Positive tests
+res1=$(validate_run_id "101")
+[ "$res1" = "VALID:101" ] || exit 1
+
+res2=$(validate_run_id "44924745603")
+[ "$res2" = "VALID:44924745603" ] || exit 1
+
+echo "ALL_RUN_ID_CHECKS_PASSED"
+""", encoding="utf-8")
+    res_parse = subprocess.run([bash_bin, test_parse_sh.as_posix()], capture_output=True, text=True)
+    assert res_parse.returncode == 0
+    assert "ALL_RUN_ID_CHECKS_PASSED" in res_parse.stdout
+
+
+def test_save_deployment_state_safe_json_serialization(tmp_path):
+    """
+    Verifies that save_deployment_state() in scripts/deploy_blue_green.sh:
+    1. Correctly serializes quotes, backslashes, newlines, and special characters.
+    2. Retains all existing state schema fields and values without corruption.
+    3. Retains atomic temporary-file replacement and 0644/0755 permissions.
+    4. Guarantees that serialization failure cannot corrupt an existing state file.
+    """
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    if git_bash.exists():
+        bash_bin = str(git_bash)
+    else:
+        bash_bin = shutil.which("bash")
+
+    if not bash_bin or not os.path.exists(bash_bin):
+        pytest.skip("Bash executable not available")
+
+    try:
+        probe = subprocess.run([bash_bin, "-c", "exit 0"], capture_output=True, timeout=5)
+        if probe.returncode != 0:
+            pytest.skip("Bash executable cannot execute in current environment")
+    except Exception:
+        pytest.skip("Bash probe failed")
+
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "scripts" / "deploy_blue_green.sh"
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / "deployment_state.json"
+
+    # Tricky metadata containing double quotes, single quotes, backslashes, newlines, and tabs
+    tricky_dep_id = 'DEP-"test"\\with\\backslash\nand\nnewline\tand\'quotes\''
+    tricky_sha = 'commit\\sha"with"quotes\nand\nnewlines'
+    tricky_digest = 'sha256:digest"with"quote\\and\\backslash\nnewline'
+    tricky_prev_container = 'prev"container"\\path\nnewline'
+    tricky_cand_container = 'cand"container"\\path\nnewline'
+    tricky_status = 'status"quoted"\\with\\backslash\nnewline'
+
+    env = os.environ.copy()
+    env["DEPLOYMENT_STATE_FILE"] = state_file.as_posix()
+    env["GITHUB_RUN_ID"] = "44924745603"
+    env["DEPLOYMENT_ID"] = tricky_dep_id
+    env["GITHUB_SHA"] = tricky_sha
+    env["IMAGE_DIGEST"] = tricky_digest
+    env["ACTIVE_SLOT"] = "blue"
+    env["ACTIVE_CONTAINER"] = tricky_prev_container
+    env["CANDIDATE_SLOT"] = "green"
+    env["CANDIDATE_CONTAINER"] = tricky_cand_container
+
+    env["STATE_STATUS"] = tricky_status
+    env["STATE_CUTOVER"] = "true"
+
+    # 1. Successful execution via --save-state
+    res = subprocess.run(
+        [bash_bin, script_path.as_posix(), "--save-state"],
+        env=env,
+        capture_output=True,
+        text=True
+    )
+    assert res.returncode == 0, f"save_state failed: stdout={res.stdout}, stderr={res.stderr}"
+    assert state_file.exists()
+
+    # 2. Parse resulting file and verify exact preservation of all fields and tricky characters
+    content = state_file.read_text(encoding="utf-8")
+    loaded = json.loads(content)
+
+    assert loaded["schema_version"] == "1.0"
+    assert loaded["github_run_id"] == "44924745603"
+    assert loaded["deployment_id"] == tricky_dep_id
+    assert loaded["commit_sha"] == tricky_sha
+    assert loaded["image_digest"] == tricky_digest
+    assert loaded["previous_slot"] == "blue"
+    assert loaded["previous_container"] == tricky_prev_container
+    assert loaded["candidate_slot"] == "green"
+    assert loaded["candidate_container"] == tricky_cand_container
+    assert loaded["cutover_performed"] is True
+    assert loaded["deployment_status"] == tricky_status
+    assert "timestamp" in loaded
+
+    # 3. Verify atomic failure preservation:
+    # If a subsequent write attempt fails (e.g. state directory is unwritable),
+    # the existing state file MUST remain byte-for-byte intact.
+    original_bytes = state_file.read_bytes()
+
+    # Test failure with an unwritable path (targeting an uncreatable directory under a file)
+    bad_target = state_dir / "blocked_file" / "state.json"
+    bad_target.parent.write_text("blocking file", encoding="utf-8")
+
+    env_bad = env.copy()
+    env_bad["DEPLOYMENT_STATE_FILE"] = bad_target.as_posix()
+    res_bad = subprocess.run(
+        [bash_bin, script_path.as_posix(), "--save-state", "fail", "false"],
+        env=env_bad,
+        capture_output=True,
+        text=True
+    )
+    assert res_bad.returncode != 0
+    # Original file is preserved byte-for-byte
+    assert state_file.read_bytes() == original_bytes

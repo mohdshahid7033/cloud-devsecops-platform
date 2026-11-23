@@ -1196,6 +1196,9 @@ jobs:
           export DB_PASSWORD="$DB_PASSWORD"
           export DB_NAME="$DB_NAME"
           export DB_USER="$DB_USER"
+          export GITHUB_RUN_ID="__DEPLOYMENT_RUN_ID__"
+          export DEPLOYMENT_ID="__DEPLOYMENT_RUN_ID__"
+          export GITHUB_SHA="__GITHUB_SHA__"
           /home/ec2-user/scripts/deploy_blue_green.sh "__DEPLOY_IMAGE__"
 
           echo "=== 6. ENSURING MONITORING SERVICES ==="
@@ -1228,6 +1231,8 @@ jobs:
           sed -i "s|__AWS_ACCOUNT_ID__|$AWS_ACCOUNT_ID|g" remote_wrapper.sh
           sed -i "s|__DEPLOY_SCRIPT_GZ_B64__|$DEPLOY_SCRIPT_GZ_B64|g" remote_wrapper.sh
           sed -i "s|__DASHBOARD_GZ_B64__|$DASHBOARD_GZ_B64|g" remote_wrapper.sh
+          sed -i "s|__DEPLOYMENT_RUN_ID__|${{ github.run_id }}|g" remote_wrapper.sh
+          sed -i "s|__GITHUB_SHA__|${{ github.sha }}|g" remote_wrapper.sh
 
           jq -R -s --arg inst "$TARGET_INSTANCE_ID" '{
             "InstanceIds": [$inst],
@@ -1277,7 +1282,7 @@ jobs:
             --command-id "$COMMAND_ID" \
             --instance-id "$TARGET_INSTANCE_ID" \
             --region ap-south-1 \
-            --output json 2>/dev/null || true)
+            --output json 2>/dev/null) || INVOCATION_JSON=""
 
           if [ -n "$INVOCATION_JSON" ]; then
             echo "=== SSM Standard Output ==="
@@ -1537,7 +1542,7 @@ jobs:
             --command-id "$COMMAND_ID" \
             --instance-id "$TARGET_INSTANCE_ID" \
             --region ap-south-1 \
-            --output json 2>/dev/null || true)
+            --output json 2>/dev/null) || INVOCATION_JSON=""
 
           if [ -n "$INVOCATION_JSON" ]; then
             echo "=== Rollback SSM Output ==="
@@ -1563,11 +1568,116 @@ jobs:
         if: success()
         env:
           TARGET_INSTANCE_ID: ${{ steps.resolve_ec2.outputs.instance_id }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
         run: |
-          echo "External verification passed. Finalizing deployment state on production instance..."
-          aws ssm send-command \
-            --instance-ids "$TARGET_INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["/home/ec2-user/scripts/deploy_blue_green.sh --mark-verified"]' \
-            --region ap-south-1 >/dev/null 2>&1 || true
+          echo "External verification passed. Finalizing deployment state on production instance for workflow run $WORKFLOW_RUN_ID..."
+          case "$WORKFLOW_RUN_ID" in
+            [1-9]*)
+              case "$WORKFLOW_RUN_ID" in
+                *[!0-9]*)
+                  echo "ERROR: WORKFLOW_RUN_ID contains non-numeric characters: '$WORKFLOW_RUN_ID'" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "ERROR: WORKFLOW_RUN_ID is not a strictly positive canonical decimal run ID: '$WORKFLOW_RUN_ID'" >&2
+              exit 1
+              ;;
+          esac
+
+          FINAL_PAYLOAD=$(jq -n \
+            --arg inst "$TARGET_INSTANCE_ID" \
+            --arg run_id "$WORKFLOW_RUN_ID" \
+            '{
+              "InstanceIds": [$inst],
+              "DocumentName": "AWS-RunShellScript",
+              "Parameters": {
+                "commands": ["/home/ec2-user/scripts/deploy_blue_green.sh --mark-verified " + $run_id]
+              }
+            }')
+
+          COMMAND_ID=$(aws ssm send-command \
+            --cli-input-json "$FINAL_PAYLOAD" \
+            --region ap-south-1 \
+            --query "Command.CommandId" \
+            --output text)
+
+          if [ -z "$COMMAND_ID" ] || [ "$COMMAND_ID" = "None" ]; then
+            echo "ERROR: Failed to dispatch SSM finalization command: CommandId was empty or None" >&2
+            exit 1
+          fi
+
+          echo "Dispatched SSM Finalization Command ID: $COMMAND_ID on instance $TARGET_INSTANCE_ID"
+
+          MAX_WAIT=60
+          START_TIME=$(date +%s)
+          STATUS=""
+
+          while [ $(( $(date +%s) - START_TIME )) -lt $MAX_WAIT ]; do
+            STATUS=$(timeout 15 aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$TARGET_INSTANCE_ID" \
+              --region ap-south-1 \
+              --query "Status" \
+              --output text 2>/dev/null) || STATUS=""
+
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              break
+            fi
+            sleep 3
+          done
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "ERROR: SSM Finalization failed with status: ${STATUS:-Unknown}" >&2
+            exit 1
+          fi
+
+          INVOCATION_JSON=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$TARGET_INSTANCE_ID" \
+            --region ap-south-1 \
+            --output json 2>/dev/null) || INVOCATION_JSON=""
+
+          if [ -z "$INVOCATION_JSON" ]; then
+            echo "ERROR: Failed to retrieve SSM command invocation details (invocation JSON was empty)." >&2
+            exit 1
+          fi
+
+          if ! echo "$INVOCATION_JSON" | jq -e . >/dev/null 2>&1; then
+            echo "ERROR: SSM invocation output is not valid JSON." >&2
+            exit 1
+          fi
+
+          echo "=== SSM Finalization Standard Output ==="
+          echo "$INVOCATION_JSON" | jq -r '.StandardOutputContent // empty'
+          STDERR=$(echo "$INVOCATION_JSON" | jq -r '.StandardErrorContent // empty')
+          if [ -n "$STDERR" ]; then
+            echo "=== SSM Finalization Standard Error ==="
+            echo "$STDERR"
+          fi
+
+          RC_TYPE=$(echo "$INVOCATION_JSON" | jq -r 'if has("ResponseCode") then (.ResponseCode | type) else "missing" end' 2>/dev/null || echo "missing")
+          RC_VALUE=$(echo "$INVOCATION_JSON" | jq -r 'if has("ResponseCode") and .ResponseCode != null then (.ResponseCode | tostring) else "" end' 2>/dev/null || echo "")
+
+          if [ "$RC_TYPE" = "missing" ]; then
+            echo "ERROR: SSM command invocation is missing ResponseCode field." >&2
+            exit 1
+          fi
+
+          if [ "$RC_TYPE" != "number" ]; then
+            echo "ERROR: SSM command invocation ResponseCode is not a numeric type (type: '$RC_TYPE', value: '$RC_VALUE')." >&2
+            exit 1
+          fi
+
+          case "$RC_VALUE" in
+            0)
+              echo "SSM finalization command succeeded with exit code 0."
+              ;;
+            *)
+              echo "ERROR: SSM finalization command exited with non-zero or non-integer code: $RC_VALUE" >&2
+              exit 1
+              ;;
+          esac
+
           echo "Production deployment and verification completed successfully!"

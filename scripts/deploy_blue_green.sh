@@ -25,6 +25,23 @@
 
 set -euo pipefail
 
+# Capture incoming strictly positive canonical decimal GitHub Actions run ID BEFORE resolve_deployment_id or image processing.
+# Strictly no fallback to DEPLOYMENT_ID, run_id, SHA, or image digest.
+# Must reject leading-zero values (e.g. 00101), zero, negative, and non-numeric values.
+ORIG_GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
+case "$ORIG_GITHUB_RUN_ID" in
+    [1-9]*)
+        case "$ORIG_GITHUB_RUN_ID" in
+            *[!0-9]*)
+                ORIG_GITHUB_RUN_ID=""
+                ;;
+        esac
+        ;;
+    *)
+        ORIG_GITHUB_RUN_ID=""
+        ;;
+esac
+
 # ------------------------------------------------------------------------------
 # Configuration & Configurable Overrides (for testing & production)
 # ------------------------------------------------------------------------------
@@ -71,7 +88,17 @@ fi
 
 DEPLOY_IMAGE="${1:-${DEPLOY_IMAGE:-}}"
 DEPLOYMENT_ID="$(resolve_deployment_id "$DEPLOY_IMAGE")"
-DEPLOYMENT_STATE_FILE="${DEPLOYMENT_STATE_FILE:-/home/ec2-user/scripts/deployment_state.json}"
+DEPLOYMENT_STATE_FILE="${DEPLOYMENT_STATE_FILE:-/opt/devsecops/state/deployment_state.json}"
+GITHUB_RUN_ID="${ORIG_GITHUB_RUN_ID}"
+GITHUB_SHA="${GITHUB_SHA:-}"
+IMAGE_DIGEST="${IMAGE_DIGEST:-}"
+if [ -z "$IMAGE_DIGEST" ] && [ -n "$DEPLOY_IMAGE" ]; then
+    case "$DEPLOY_IMAGE" in
+        *@sha256:*)
+            IMAGE_DIGEST="sha256:${DEPLOY_IMAGE##*@sha256:}"
+            ;;
+    esac
+fi
 
 DOCKER_CMD="${DOCKER_CMD:-docker}"
 CURL_CMD="${CURL_CMD:-curl}"
@@ -88,10 +115,10 @@ POST_SWITCH_TIMEOUT_SECS="${POST_SWITCH_TIMEOUT_SECS:-30}"
 SLOT_BLUE="devsecops-app-blue"
 SLOT_GREEN="devsecops-app-green"
 
-CANDIDATE_CONTAINER=""
-ACTIVE_CONTAINER=""
-CANDIDATE_SLOT=""
-ACTIVE_SLOT=""
+CANDIDATE_CONTAINER="${CANDIDATE_CONTAINER:-}"
+ACTIVE_CONTAINER="${ACTIVE_CONTAINER:-}"
+CANDIDATE_SLOT="${CANDIDATE_SLOT:-}"
+ACTIVE_SLOT="${ACTIVE_SLOT:-}"
 SWITCH_PERFORMED=false
 CANDIDATE_CREATED=false
 PRIOR_ROUTING_CONFIG=""
@@ -171,62 +198,288 @@ save_deployment_state() {
     local state_dir
     state_dir="$(dirname "$DEPLOYMENT_STATE_FILE")"
     if ! mkdir -p "$state_dir" 2>/dev/null; then
-        state_dir="/tmp"
-        DEPLOYMENT_STATE_FILE="/tmp/$(basename "$DEPLOYMENT_STATE_FILE")"
+        log_error "CRITICAL: Failed to create deployment state directory '$state_dir'. Aborting."
+        exit 1
     fi
+    if ! chmod 0755 "$state_dir"; then
+        log_error "CRITICAL: Failed to set permissions 0755 on deployment state directory '$state_dir'. Aborting."
+        exit 1
+    fi
+
+    local ts
+    ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date +'%Y-%m-%dT%H:%M:%SZ')"
     local tmp_file="${DEPLOYMENT_STATE_FILE}.tmp.$$"
-    cat << EOF > "$tmp_file"
-{
-  "deployment_id": "${DEPLOYMENT_ID:-unknown}",
-  "previous_slot": "${ACTIVE_SLOT:-none}",
-  "previous_container": "${ACTIVE_CONTAINER:-none}",
-  "candidate_slot": "${CANDIDATE_SLOT:-none}",
-  "candidate_container": "${CANDIDATE_CONTAINER:-none}",
-  "cutover_performed": ${cutover},
-  "deployment_status": "${status}",
-  "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date +'%Y-%m-%dT%H:%M:%SZ')"
-}
-EOF
-    mv -f "$tmp_file" "$DEPLOYMENT_STATE_FILE"
+    local write_ok=0
+
+    # Normalize cutover to boolean true / false
+    local cutover_bool="false"
+    if [ "$cutover" = "true" ] || [ "$cutover" = "True" ] || [ "$cutover" = "1" ]; then
+        cutover_bool="true"
+    fi
+
+    # 1. Primary safe JSON encoding: python (native RFC 8259 compliant encoding)
+    local py_bin="python"
+    if command -v python3 >/dev/null 2>&1; then
+        py_bin="python3"
+    fi
+
+    if command -v "$py_bin" >/dev/null 2>&1; then
+        if "$py_bin" -c '
+import sys, json
+
+try:
+    schema_ver = sys.argv[1]
+    github_run_id = sys.argv[2]
+    dep_id = sys.argv[3]
+    commit_sha = sys.argv[4]
+    image_dig = sys.argv[5]
+    prev_s = sys.argv[6]
+    prev_c = sys.argv[7]
+    cand_s = sys.argv[8]
+    cand_c = sys.argv[9]
+    cutover = sys.argv[10].lower() == "true"
+    status_val = sys.argv[11]
+    ts_val = sys.argv[12]
+    out_file = sys.argv[13]
+
+    payload = {
+        "schema_version": schema_ver,
+        "github_run_id": github_run_id,
+        "deployment_id": dep_id,
+        "commit_sha": commit_sha,
+        "image_digest": image_dig,
+        "previous_slot": prev_s,
+        "previous_container": prev_c,
+        "candidate_slot": cand_s,
+        "candidate_container": cand_c,
+        "cutover_performed": cutover,
+        "deployment_status": status_val,
+        "timestamp": ts_val
+    }
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+except Exception:
+    sys.exit(1)
+' "1.0" "${GITHUB_RUN_ID:-}" "${DEPLOYMENT_ID:-unknown}" "${GITHUB_SHA:-}" "${IMAGE_DIGEST:-}" \
+  "${ACTIVE_SLOT:-none}" "${ACTIVE_CONTAINER:-none}" "${CANDIDATE_SLOT:-none}" "${CANDIDATE_CONTAINER:-none}" \
+  "$cutover_bool" "$status" "$ts" "$tmp_file" 2>/dev/null; then
+            write_ok=1
+        fi
+    fi
+
+    # 2. Secondary fallback safe JSON encoding: jq
+    if [ "$write_ok" -ne 1 ] && command -v "$JQ_CMD" >/dev/null 2>&1; then
+        if $JQ_CMD -n \
+            --arg s_ver "1.0" \
+            --arg run_id "${GITHUB_RUN_ID:-}" \
+            --arg dep_id "${DEPLOYMENT_ID:-unknown}" \
+            --arg c_sha "${GITHUB_SHA:-}" \
+            --arg img_dig "${IMAGE_DIGEST:-}" \
+            --arg prev_s "${ACTIVE_SLOT:-none}" \
+            --arg prev_c "${ACTIVE_CONTAINER:-none}" \
+            --arg cand_s "${CANDIDATE_SLOT:-none}" \
+            --arg cand_c "${CANDIDATE_CONTAINER:-none}" \
+            --argjson cutover "$cutover_bool" \
+            --arg status "$status" \
+            --arg ts "$ts" \
+            '{
+                schema_version: $s_ver,
+                github_run_id: $run_id,
+                deployment_id: $dep_id,
+                commit_sha: $c_sha,
+                image_digest: $img_dig,
+                previous_slot: $prev_s,
+                previous_container: $prev_c,
+                candidate_slot: $cand_s,
+                candidate_container: $cand_c,
+                cutover_performed: $cutover,
+                deployment_status: $status,
+                timestamp: $ts
+            }' > "$tmp_file" 2>/dev/null; then
+            write_ok=1
+        fi
+    fi
+
+    if [ "$write_ok" -ne 1 ] || [ ! -s "$tmp_file" ]; then
+        log_error "CRITICAL: Failed to safely serialize deployment state to JSON. Aborting."
+        rm -f "$tmp_file" 2>/dev/null || true
+        exit 1
+    fi
+
+    if ! chmod 0644 "$tmp_file"; then
+        log_error "CRITICAL: Failed to set permissions 0644 on temporary state file '$tmp_file'. Aborting."
+        rm -f "$tmp_file" 2>/dev/null || true
+        exit 1
+    fi
+    if ! mv -f "$tmp_file" "$DEPLOYMENT_STATE_FILE"; then
+        log_error "CRITICAL: Failed to atomically write deployment state to '$DEPLOYMENT_STATE_FILE'!"
+        rm -f "$tmp_file" 2>/dev/null || true
+        exit 1
+    fi
 }
 
 mark_verified() {
-    log_info "Marking deployment state as verified..."
-    if [ -f "$DEPLOYMENT_STATE_FILE" ]; then
-        local prev_cont="" cand_cont="" prev_s="" cand_s="" dep_id=""
-        if command -v "$JQ_CMD" >/dev/null 2>&1; then
-            dep_id=$($JQ_CMD -r '.deployment_id // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
-            prev_s=$($JQ_CMD -r '.previous_slot // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
-            prev_cont=$($JQ_CMD -r '.previous_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
-            cand_s=$($JQ_CMD -r '.candidate_slot // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
-            cand_cont=$($JQ_CMD -r '.candidate_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
-        else
-            local parsed_state
-            parsed_state=$(python -c '
+    local expected_run_id="${1:-${EXPECTED_RUN_ID:-}}"
+    log_info "Marking deployment state as verified (expected workflow run ID: ${expected_run_id:-none})..."
+
+    # 1. Require expected run ID and validate as strictly positive canonical decimal identifier
+    # Must reject leading-zero values (e.g. 00101), zero, negative, whitespace-padded, prefixed, and non-numeric values.
+    case "$expected_run_id" in
+        [1-9]*)
+            case "$expected_run_id" in
+                *[!0-9]*)
+                    log_error "CRITICAL: Cannot mark deployment as verified: expected workflow run ID contains non-numeric characters ('$expected_run_id')."
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            log_error "CRITICAL: Cannot mark deployment as verified: expected workflow run ID '$expected_run_id' is missing, non-numeric, non-positive, or contains leading zeros."
+            exit 1
+            ;;
+    esac
+
+    if [ ! -f "$DEPLOYMENT_STATE_FILE" ]; then
+        log_error "CRITICAL: Cannot mark deployment as verified: state file '$DEPLOYMENT_STATE_FILE' does not exist."
+        exit 1
+    fi
+
+    local prev_cont="" cand_cont="" prev_s="" cand_s="" dep_id="" run_id="" c_sha="" img_dig="" s_ver="" cutover_perf="" dep_status=""
+    local parse_success=0
+
+    if command -v "$JQ_CMD" >/dev/null 2>&1; then
+        s_ver=$($JQ_CMD -r '.schema_version // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        run_id=$($JQ_CMD -r '.github_run_id // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        dep_id=$($JQ_CMD -r '.deployment_id // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        c_sha=$($JQ_CMD -r '.commit_sha // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        img_dig=$($JQ_CMD -r '.image_digest // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        prev_s=$($JQ_CMD -r '.previous_slot // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        prev_cont=$($JQ_CMD -r '.previous_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        cand_s=$($JQ_CMD -r '.candidate_slot // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        cand_cont=$($JQ_CMD -r '.candidate_container // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        cutover_perf=$($JQ_CMD -r 'if has("cutover_performed") then (.cutover_performed | tostring) else "" end' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        dep_status=$($JQ_CMD -r '.deployment_status // empty' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
+        if [ -n "$s_ver" ]; then
+            parse_success=1
+        fi
+    fi
+
+    if [ "$parse_success" -ne 1 ]; then
+        local parsed_state
+        parsed_state=$(python -c '
 import sys, json
 try:
-    with open(sys.argv[1]) as f:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
         d = json.load(f)
-    print(str(d.get("deployment_id", "")) + " " + str(d.get("previous_slot", "")) + " " + str(d.get("previous_container", "")) + " " + str(d.get("candidate_slot", "")) + " " + str(d.get("candidate_container", "")))
+    if not isinstance(d, dict):
+        sys.exit(2)
+    print(json.dumps({
+        "schema_version": str(d.get("schema_version", "")),
+        "github_run_id": str(d.get("github_run_id", "")),
+        "deployment_id": str(d.get("deployment_id", "")),
+        "commit_sha": str(d.get("commit_sha", "")),
+        "image_digest": str(d.get("image_digest", "")),
+        "previous_slot": str(d.get("previous_slot", "")),
+        "previous_container": str(d.get("previous_container", "")),
+        "candidate_slot": str(d.get("candidate_slot", "")),
+        "candidate_container": str(d.get("candidate_container", "")),
+        "cutover_performed": str(d.get("cutover_performed", "")).lower() if "cutover_performed" in d else "",
+        "deployment_status": str(d.get("deployment_status", ""))
+    }))
 except Exception:
-    pass
+    sys.exit(1)
 ' "$DEPLOYMENT_STATE_FILE" 2>/dev/null || true)
-            dep_id=$(echo "$parsed_state" | awk '{print $1}')
-            prev_s=$(echo "$parsed_state" | awk '{print $2}')
-            prev_cont=$(echo "$parsed_state" | awk '{print $3}')
-            cand_s=$(echo "$parsed_state" | awk '{print $4}')
-            cand_cont=$(echo "$parsed_state" | awk '{print $5}')
+
+        if [ -n "$parsed_state" ]; then
+            s_ver=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("schema_version", ""))' 2>/dev/null || true)
+            run_id=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("github_run_id", ""))' 2>/dev/null || true)
+            dep_id=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("deployment_id", ""))' 2>/dev/null || true)
+            c_sha=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("commit_sha", ""))' 2>/dev/null || true)
+            img_dig=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("image_digest", ""))' 2>/dev/null || true)
+            prev_s=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("previous_slot", ""))' 2>/dev/null || true)
+            prev_cont=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("previous_container", ""))' 2>/dev/null || true)
+            cand_s=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("candidate_slot", ""))' 2>/dev/null || true)
+            cand_cont=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("candidate_container", ""))' 2>/dev/null || true)
+            cutover_perf=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("cutover_performed", ""))' 2>/dev/null || true)
+            dep_status=$(echo "$parsed_state" | python -c 'import sys, json; print(json.load(sys.stdin).get("deployment_status", ""))' 2>/dev/null || true)
+            parse_success=1
         fi
-        DEPLOYMENT_ID="${dep_id:-$DEPLOYMENT_ID}"
-        ACTIVE_SLOT="${prev_s:-$ACTIVE_SLOT}"
-        ACTIVE_CONTAINER="${prev_cont:-$ACTIVE_CONTAINER}"
-        CANDIDATE_SLOT="${cand_s:-$CANDIDATE_SLOT}"
-        CANDIDATE_CONTAINER="${cand_cont:-$CANDIDATE_CONTAINER}"
-        save_deployment_state "verified" true
-        log_info "Deployment state successfully marked as verified."
-    else
-        log_warn "No deployment state file found to mark as verified."
     fi
+
+    if [ "$parse_success" -ne 1 ]; then
+        log_error "CRITICAL: Cannot mark deployment as verified: state file '$DEPLOYMENT_STATE_FILE' is malformed, corrupt, or unreadable."
+        exit 1
+    fi
+
+    # 2. Require schema_version == "1.0"
+    if [ "$s_ver" != "1.0" ]; then
+        log_error "CRITICAL: Cannot mark deployment as verified: schema_version '$s_ver' is invalid (expected '1.0')."
+        exit 1
+    fi
+
+    # 3. Require state file github_run_id to be strictly positive canonical decimal identifier
+    # Must reject leading-zero values (e.g. 00101), zero, negative, whitespace-padded, prefixed, and non-numeric values.
+    case "$run_id" in
+        [1-9]*)
+            case "$run_id" in
+                *[!0-9]*)
+                    log_error "CRITICAL: Cannot mark deployment as verified: state file github_run_id contains non-numeric characters ('$run_id')."
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            log_error "CRITICAL: Cannot mark deployment as verified: state file github_run_id '$run_id' is missing, non-numeric, non-positive, or contains leading zeros."
+            exit 1
+            ;;
+    esac
+
+    # 4. Require exact match between expected run ID and state file github_run_id
+    if [ "$expected_run_id" != "$run_id" ]; then
+        log_error "CRITICAL: Cannot mark deployment as verified: expected workflow run ID '$expected_run_id' does not match state file github_run_id '$run_id'."
+        exit 1
+    fi
+
+    # 5. Require exact canonical candidate slot/container pair
+    local valid_candidate=0
+    if [ "$cand_s" = "green" ] && [ "$cand_cont" = "devsecops-app-green" ]; then
+        valid_candidate=1
+    elif [ "$cand_s" = "blue" ] && [ "$cand_cont" = "devsecops-app-blue" ]; then
+        valid_candidate=1
+    fi
+    if [ "$valid_candidate" -ne 1 ]; then
+        log_error "CRITICAL: Cannot mark deployment as verified: candidate slot '$cand_s' and container '$cand_cont' do not form an exact canonical pair."
+        exit 1
+    fi
+
+    # 4. Require existing cutover_performed must already be true
+    if [ "$cutover_perf" != "true" ]; then
+        log_error "CRITICAL: Cannot mark deployment as verified: existing cutover_performed is not true ('$cutover_perf')."
+        exit 1
+    fi
+
+    # 5. Require existing deployment_status must be an explicitly permitted post-cutover state, normally standby_ready
+    case "$dep_status" in
+        standby_ready|cutover_succeeded)
+            ;;
+        *)
+            log_error "CRITICAL: Cannot mark deployment as verified: existing deployment_status '$dep_status' is not an allowed post-cutover state."
+            exit 1
+            ;;
+    esac
+
+    # All validations passed: finalize verified state preserving all metadata
+    GITHUB_RUN_ID="$run_id"
+    DEPLOYMENT_ID="${dep_id:-unknown}"
+    GITHUB_SHA="${c_sha:-}"
+    IMAGE_DIGEST="${img_dig:-}"
+    ACTIVE_SLOT="${prev_s:-none}"
+    ACTIVE_CONTAINER="${prev_cont:-none}"
+    CANDIDATE_SLOT="$cand_s"
+    CANDIDATE_CONTAINER="$cand_cont"
+    save_deployment_state "verified" true
+    log_info "Deployment state successfully marked as verified."
 }
 
 execute_standalone_rollback() {
@@ -449,7 +702,12 @@ fi
 
 if [ "${1:-}" = "--mark-verified" ] || [ "${1:-}" = "mark-verified" ]; then
     acquire_lock
-    mark_verified
+    mark_verified "${2:-${EXPECTED_RUN_ID:-}}"
+    exit 0
+fi
+
+if [ "${1:-}" = "--save-state" ] || [ "${1:-}" = "save-state" ]; then
+    save_deployment_state "${2:-${STATE_STATUS:-unknown}}" "${3:-${STATE_CUTOVER:-false}}"
     exit 0
 fi
 
@@ -718,12 +976,25 @@ fi
 $DOCKER_CMD stop "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
 $DOCKER_CMD rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
 
+# Ensure dedicated state directory exists before candidate container startup
+STATE_DIR="$(dirname "$DEPLOYMENT_STATE_FILE")"
+if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
+    log_error "CRITICAL: Failed to create deployment state directory '$STATE_DIR'. Aborting deployment."
+    exit 1
+fi
+if ! chmod 0755 "$STATE_DIR"; then
+    log_error "CRITICAL: Failed to set permissions 0755 on deployment state directory '$STATE_DIR'. Aborting deployment."
+    exit 1
+fi
+
 # Start candidate container on devsecops-network (WITHOUT stopping active slot!)
 log_info "Starting candidate container '$CANDIDATE_CONTAINER' on network '$NETWORK_NAME'..."
 if ! $DOCKER_CMD run -d \
     --name "$CANDIDATE_CONTAINER" \
     --network "$NETWORK_NAME" \
     --restart always \
+    -v "${STATE_DIR}:${STATE_DIR}:ro" \
+    -e DEPLOYMENT_STATE_FILE="$DEPLOYMENT_STATE_FILE" \
     -e FLASK_ENV=production \
     -e APP_ENV="production-${CANDIDATE_SLOT}" \
     -e DB_HOST="$DB_HOST" \

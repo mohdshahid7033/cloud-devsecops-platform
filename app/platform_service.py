@@ -1441,27 +1441,100 @@ def resolve_deployment_target_slot(deploy_run=None, jobs=None):
             with open(state_file, "r", encoding="utf-8") as f:
                 state = json.load(f)
             if isinstance(state, dict) and isinstance(deploy_run, dict):
-                raw_run_id = deploy_run.get("id") or deploy_run.get("deployment_id") or deploy_run.get("run_id")
-                raw_state_id = state.get("deployment_id") or state.get("run_id") or state.get("id")
-                norm_run_id = _normalize_deployment_id(raw_run_id)
-                norm_state_id = _normalize_deployment_id(raw_state_id)
-                # State-file evidence is accepted ONLY when:
-                # 1. Selected deployment run has a non-empty ID.
-                # 2. State file has a non-empty deployment ID.
-                # 3. Both IDs match exactly after appropriate normalization.
-                if norm_run_id and norm_state_id and norm_run_id == norm_state_id:
-                    cand = state.get("candidate_container") or state.get("candidate_slot") or state.get("target_slot")
-                    if cand:
-                        cand_str = str(cand).lower().strip()
-                        has_blue = "blue" in cand_str
-                        has_green = "green" in cand_str
-                        if has_blue and has_green:
-                            candidates.add("devsecops-app-blue")
-                            candidates.add("devsecops-app-green")
-                        elif has_blue:
-                            candidates.add("devsecops-app-blue")
-                        elif has_green:
-                            candidates.add("devsecops-app-green")
+                # 4.1 Schema version check: must be strictly "1.0"
+                schema_ver = state.get("schema_version")
+                schema_valid = (schema_ver == "1.0")
+
+                # 4.2 Mandatory primary run correlation: deploy_run["id"] and state.github_run_id ONLY
+                # Require both to be strictly positive canonical decimal numeric identifiers (digits only, > 0, no leading zeros).
+                # Do not substitute run_id or deployment_id when id is absent.
+                raw_run_id = deploy_run.get("id")
+                raw_state_id = state.get("github_run_id")
+
+                is_pos_numeric_run = False
+                run_id_str = ""
+                if raw_run_id is not None and not isinstance(raw_run_id, bool):
+                    if isinstance(raw_run_id, int) and raw_run_id > 0:
+                        is_pos_numeric_run = True
+                        run_id_str = str(raw_run_id)
+                    elif isinstance(raw_run_id, str) and raw_run_id.isdigit() and not raw_run_id.startswith("0"):
+                        is_pos_numeric_run = True
+                        run_id_str = raw_run_id
+
+                is_pos_numeric_state = False
+                state_id_str = ""
+                if raw_state_id is not None and not isinstance(raw_state_id, bool):
+                    if isinstance(raw_state_id, int) and raw_state_id > 0:
+                        is_pos_numeric_state = True
+                        state_id_str = str(raw_state_id)
+                    elif isinstance(raw_state_id, str) and raw_state_id.isdigit() and not raw_state_id.startswith("0"):
+                        is_pos_numeric_state = True
+                        state_id_str = raw_state_id
+
+                # State-file evidence is accepted ONLY when schema is valid and primary run IDs match exactly
+                if schema_valid and is_pos_numeric_run and is_pos_numeric_state and run_id_str == state_id_str:
+                    # 4.3 Secondary consistency checks: commit SHA
+                    state_commit = str(state.get("commit_sha") or "").strip().lower()
+                    run_commit = str(deploy_run.get("head_sha") or deploy_run.get("commit_hash") or "").strip().lower()
+                    commit_conflict = False
+                    if state_commit and run_commit:
+                        # Require exact full 40-character SHA comparison
+                        is_state_full_sha = (len(state_commit) == 40 and all(c in "0123456789abcdef" for c in state_commit))
+                        is_run_full_sha = (len(run_commit) == 40 and all(c in "0123456789abcdef" for c in run_commit))
+                        if is_state_full_sha and is_run_full_sha:
+                            if state_commit != run_commit:
+                                commit_conflict = True
+                        else:
+                            # Do not accept a shorter value as a substitute for a full SHA
+                            commit_conflict = True
+
+                    # 4.4 Secondary consistency checks: image digest
+                    state_digest = str(state.get("image_digest") or "").strip().lower()
+                    run_digest = str(deploy_run.get("image_digest") or "").strip().lower()
+                    digest_conflict = False
+                    if state_digest and run_digest:
+                        if state_digest != run_digest:
+                            digest_conflict = True
+
+                    # 4.5 Verification status checks: must be strictly verified with cutover confirmed
+                    is_cutover = state.get("cutover_performed") is True or str(state.get("cutover_performed", "")).lower() == "true"
+                    dep_status = str(state.get("deployment_status", "")).strip().lower()
+                    is_verified = dep_status == "verified"
+                    is_rollback_or_failed = dep_status in ("rolled_back", "failed")
+
+                    # 4.6 Exact canonical slot and container pair validation (no substrings)
+                    cand_slot = state.get("candidate_slot")
+                    cand_cont = state.get("candidate_container")
+
+                    resolved_slot = None
+                    pair_conflict = False
+
+                    if isinstance(cand_slot, str) and isinstance(cand_cont, str):
+                        norm_slot = cand_slot.strip().lower()
+                        norm_cont = cand_cont.strip().lower()
+
+                        if norm_slot == "green" and norm_cont == "devsecops-app-green":
+                            resolved_slot = "devsecops-app-green"
+                        elif norm_slot == "blue" and norm_cont == "devsecops-app-blue":
+                            resolved_slot = "devsecops-app-blue"
+                        else:
+                            pair_conflict = True
+                    else:
+                        pair_conflict = True
+
+                    # 4.7 Final acceptance rule: all criteria must be satisfied
+                    if (not commit_conflict and
+                        not digest_conflict and
+                        not pair_conflict and
+                        not is_rollback_or_failed and
+                        is_cutover and
+                        is_verified and
+                        resolved_slot):
+                        candidates.add(resolved_slot)
+                    elif commit_conflict or digest_conflict or pair_conflict:
+                        # Contradictory evidence: force conflict to return unknown
+                        candidates.add("devsecops-app-blue")
+                        candidates.add("devsecops-app-green")
         except Exception:
             pass
 
