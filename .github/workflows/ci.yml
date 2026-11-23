@@ -662,6 +662,8 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           IMAGE_DIGEST: ${{ needs.publish-ecr.outputs.image_digest }}
           IMAGE_URI: ${{ needs.publish-ecr.outputs.image_uri }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           DEPLOY_IMAGE="${IMAGE_URI:-${AWS_ACCOUNT_ID}.dkr.ecr.ap-south-1.amazonaws.com/devsecops-platform@${IMAGE_DIGEST}}"
           if ! echo "$DEPLOY_IMAGE" | grep -q '@sha256:'; then
@@ -1231,8 +1233,8 @@ jobs:
           sed -i "s|__AWS_ACCOUNT_ID__|$AWS_ACCOUNT_ID|g" remote_wrapper.sh
           sed -i "s|__DEPLOY_SCRIPT_GZ_B64__|$DEPLOY_SCRIPT_GZ_B64|g" remote_wrapper.sh
           sed -i "s|__DASHBOARD_GZ_B64__|$DASHBOARD_GZ_B64|g" remote_wrapper.sh
-          sed -i "s|__DEPLOYMENT_RUN_ID__|${{ github.run_id }}|g" remote_wrapper.sh
-          sed -i "s|__GITHUB_SHA__|${{ github.sha }}|g" remote_wrapper.sh
+          sed -i "s|__DEPLOYMENT_RUN_ID__|$GITHUB_RUN_ID|g" remote_wrapper.sh
+          sed -i "s|__GITHUB_SHA__|$GITHUB_SHA|g" remote_wrapper.sh
 
           jq -R -s --arg inst "$TARGET_INSTANCE_ID" '{
             "InstanceIds": [$inst],

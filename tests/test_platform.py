@@ -4528,3 +4528,52 @@ def test_save_deployment_state_safe_json_serialization(tmp_path):
     assert res_bad.returncode != 0
     # Original file is preserved byte-for-byte
     assert state_file.read_bytes() == original_bytes
+
+
+def test_ci_workflow_expression_length_and_env_mapping():
+    """
+    Verifies that .github/workflows/ci.yml:
+    1. Maps GITHUB_RUN_ID and GITHUB_SHA in step env: to avoid the 21,000 char expression limit.
+    2. Contains ZERO inline ${{ ... }} expressions in the large multiline ssm_deploy run block.
+    3. Correctly propagates GITHUB_RUN_ID and GITHUB_SHA to remote_wrapper.sh.
+    4. Retains SSM finalization and strict ResponseCode validation in verify-production.
+    5. Confirms production deployment jobs remain skipped on normal pushes.
+    """
+    import yaml
+    repo_root = Path(__file__).resolve().parent.parent
+    ci_file = repo_root / ".github" / "workflows" / "ci.yml"
+    with open(ci_file, "r", encoding="utf-8") as f:
+        ci_yaml = yaml.safe_load(f)
+
+    deploy_job = ci_yaml["jobs"]["deploy-blue-green"]
+    # 5. Confirm production deployment is skipped on normal push
+    assert "github.event_name == 'workflow_dispatch'" in deploy_job["if"]
+    assert "inputs.deploy_to_production == true" in deploy_job["if"]
+    assert "push" not in deploy_job["if"]
+
+    ssm_step = next(s for s in deploy_job["steps"] if s.get("id") == "ssm_deploy")
+    env = ssm_step.get("env", {})
+
+    # 1. Expressions in env: mapping
+    assert env.get("GITHUB_RUN_ID") == "${{ github.run_id }}", "GITHUB_RUN_ID must be mapped in step env"
+    assert env.get("GITHUB_SHA") == "${{ github.sha }}", "GITHUB_SHA must be mapped in step env"
+
+    run_script = ssm_step.get("run", "")
+
+    # 2. Zero inline expressions in large multiline run: block
+    assert "${{" not in run_script, "ssm_deploy run: block must not contain inline ${{ expressions"
+
+    # 3. Propagate to remote wrapper via shell variables
+    assert 'sed -i "s|__DEPLOYMENT_RUN_ID__|$GITHUB_RUN_ID|g" remote_wrapper.sh' in run_script
+    assert 'sed -i "s|__GITHUB_SHA__|$GITHUB_SHA|g" remote_wrapper.sh' in run_script
+    assert 'export GITHUB_RUN_ID="__DEPLOYMENT_RUN_ID__"' in run_script
+    assert 'export DEPLOYMENT_ID="__DEPLOYMENT_RUN_ID__"' in run_script
+    assert 'export GITHUB_SHA="__GITHUB_SHA__"' in run_script
+
+    # 4. SSM finalization and ResponseCode validation remain intact
+    verify_job = ci_yaml["jobs"]["verify-production"]
+    finalize_step = next(s for s in verify_job["steps"] if s.get("name") == "Finalize successful production deployment")
+    assert finalize_step.get("env", {}).get("WORKFLOW_RUN_ID") == "${{ github.run_id }}"
+    finalize_script = finalize_step.get("run", "")
+    assert '"$RC_TYPE" != "number"' in finalize_script
+    assert 'case "$RC_VALUE" in' in finalize_script
